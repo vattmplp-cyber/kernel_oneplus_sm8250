@@ -1742,6 +1742,54 @@ void switch_headset_state(int headset_state)
 }
 EXPORT_SYMBOL(switch_headset_state);
 
+<<<<<<< HEAD
+=======
+/**
+ * tp_gpio_current_leakage_handler - to handle gpio current leakage problem specially for lcd panel
+ */
+void tp_gpio_current_leakage_handler(bool normal)
+{
+    if (!g_tp) {
+        return;
+    }
+    if (normal) {
+        if (!IS_ERR_OR_NULL(g_tp->hw_res.pin_set_high)) {
+            TPD_INFO("%s: going to set power on mode.\n", __func__);
+            pinctrl_select_state(g_tp->hw_res.pinctrl, g_tp->hw_res.pin_set_high);
+        } else {
+            TPD_INFO("%s: cannot set power on mode.\n", __func__);
+        }
+    } else {
+        if (!IS_ERR_OR_NULL(g_tp->hw_res.pin_set_low)) {
+            TPD_INFO("%s: going to power off mode.\n", __func__);
+            pinctrl_select_state(g_tp->hw_res.pinctrl, g_tp->hw_res.pin_set_low);
+        } else {
+            TPD_INFO("%s: cannot to set power off mode.\n", __func__);
+        }
+    }
+}
+EXPORT_SYMBOL(tp_gpio_current_leakage_handler);
+
+bool tp_boot_mode_normal(void)
+{
+    if (!g_tp) {
+        return false;
+    }
+#ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
+    if ((g_tp->boot_mode == META_BOOT || \
+        g_tp->boot_mode == FACTORY_BOOT)) {
+#else
+    if ((g_tp->boot_mode == MSM_BOOT_MODE__FACTORY || \
+        g_tp->boot_mode == MSM_BOOT_MODE__RF || \
+        g_tp->boot_mode == MSM_BOOT_MODE__WLAN)) {
+#endif
+        return false;
+    }
+    return true;
+}
+EXPORT_SYMBOL(tp_boot_mode_normal);
+
+>>>>>>> b18ed5bbb784 (treewide: Fix LLVM 18 warns)
 /*
  *    gesture_enable = 0 : disable gesture
  *    gesture_enable = 1 : enable gesture when ps is far away
