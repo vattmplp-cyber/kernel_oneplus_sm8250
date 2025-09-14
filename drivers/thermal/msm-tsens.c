@@ -32,7 +32,6 @@ static int tsens_get_temp(void *data, int *temp)
     return 0;
 }
 
-
 static int tsens_get_min_temp(void *data, int *temp)
 {
 	struct tsens_sensor *s = data;
