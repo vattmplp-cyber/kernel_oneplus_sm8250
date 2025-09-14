@@ -1,0 +1,31 @@
+name: Build Kernel
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: sudo apt update && sudo apt install -y bc build-essential libncurses-dev bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu
+
+      - name: Set Environment
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+
+      - name: Build Kernel
+        run: |
+          make O=out oneplus8t_defconfig
+          make -j$(nproc) O=out
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: kernel-build
+          path: out/arch/arm64/boot/Image.gz-dtb
