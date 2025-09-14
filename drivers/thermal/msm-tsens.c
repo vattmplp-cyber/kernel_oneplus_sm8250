@@ -20,11 +20,18 @@ LIST_HEAD(tsens_device_list);
 
 static int tsens_get_temp(void *data, int *temp)
 {
-	struct tsens_sensor *s = data;
-	struct tsens_device *tmdev = s->tmdev;
+    struct tsens_sensor *s = data;
+    struct tsens_device *tmdev = s->tmdev;
 
-	return tmdev->ops->get_temp(s, temp);
+    int rc = tmdev->ops->get_temp(s, temp);
+    if (rc)
+        return rc;
+
+    *temp = *temp - 20000;
+
+    return 0;
 }
+
 
 static int tsens_get_min_temp(void *data, int *temp)
 {
