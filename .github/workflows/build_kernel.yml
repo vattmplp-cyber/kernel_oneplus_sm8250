@@ -16,6 +16,38 @@ jobs:
           sudo apt update
           sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
 
+      - name: Download and Inject RTL8188EUS Driver
+        run: |
+          # 1. Заходимо в папку бездротових драйверів
+          cd kernel_oneplus_sm8250/drivers/net/wireless
+          
+          # 2. Клонуємо репозиторій драйвера в папку rtl8188eus
+          git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
+          
+          # 3. Реєструємо драйвер у Kconfig та Makefile
+          echo 'source "drivers/net/wireless/rtl8188eus/Kconfig"' >> Kconfig
+          echo 'obj-$(CONFIG_RTL8188EUS) += rtl8188eus/' >> Makefile
+
+      - name: Configure Defconfig for TP-Link v2 (Monitor Mode)
+        run: |
+          # Шлях до твого дефконфігу
+          DEFCONFIG_PATH="kernel_oneplus_sm8250/arch/arm64/configs/vendor/meteoric_defconfig"
+          
+          # Дописуємо конфіги для підтримки USB-адаптерів та режимів моніторингу
+          echo "CONFIG_NET=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_USB_SUPPORT=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_USB=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_USB_NET_DRIVERS=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_WIRELESS=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_CFG80211=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_MAC80211=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_NL80211_TESTMODE=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_CFG80211_WEXT=y" >> $DEFCONFIG_PATH
+          
+          # Вмикаємо сам драйвер Realtek та режим монітора для нього
+          echo "CONFIG_RTL8188EUS=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_RTL8188EUS_MONITOR=y" >> $DEFCONFIG_PATH
+
       - name: Build Kernel
         run: |
           export ARCH=arm64
