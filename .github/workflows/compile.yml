@@ -14,22 +14,22 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    # 2. Скачуємо драйвер як ZIP-архів та розпаковуємо у потрібну папку
+    # 2. Скачуємо драйвер як чистий архів через curl та розпаковуємо
     - name: Download and Unzip Driver
       run: |
         cd drivers/net/wireless/
         rm -rf rtl8188eus
         
-        # Завантажуємо офіційний ZIP-архів драйвера
-        wget https://github.com -O driver.zip
+        # Завантажуємо архів за допомогою curl (ігноруючи обмеження для роботів)
+        curl -L "https://github.com" -o driver.zip
         
-        # Розпаковуємо його
+        # Розпаковуємо архів
         unzip driver.zip
         
-        # Перейменовуємо отриману папку на правильну назву
+        # Перейменовуємо розпаковану папку на правильну назву
         mv rtl8188eus-master rtl8188eus
         
-        # Видаляємо тимчасовий ZIP-файл
+        # Видаляємо файл архіву, щоб він не займав місце в репозиторії
         rm driver.zip
 
     # 3. Зберігаємо папку назад у ваш GitHub форк
@@ -38,5 +38,5 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git add drivers/net/wireless/rtl8188eus/
-        git commit -m "Add raw rtl8188eus driver folder via ZIP" || echo "No changes to commit"
+        git commit -m "Add raw rtl8188eus driver folder via curl ZIP" || echo "No changes to commit"
         git push origin HEAD:${{ github.ref }}
