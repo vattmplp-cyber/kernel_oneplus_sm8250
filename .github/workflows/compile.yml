@@ -1,9 +1,9 @@
-name: Build Meteoric Stable 13.1
+name: Copy RTL8188EUS Driver
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  copy-driver:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
@@ -11,41 +11,7 @@ jobs:
         with:
           ref: 13.1-new
 
-      - name: Setup Build Environment
+      - name: Download and Copy Driver
         run: |
-          sudo apt update
-          sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
-
-      - name: Download and Copy RTL8188EUS Driver
-        run: |
-          # Заходимо в папку бездротових мереж у корні репозиторію
           cd drivers/net/wireless
-          
-          # Копіюємо драйвер туди
           git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
-          
-          # Додаємо вказівники для збірщика ядра
-          echo 'source "drivers/net/wireless/rtl8188eus/Kconfig"' >> Kconfig
-          echo 'obj-$(CONFIG_RTL8188EUS) += rtl8188eus/' >> Makefile
-
-      - name: Build Kernel
-        run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          
-          echo "=== 1. Створення конфігурації ==="
-          make O=out vendor/meteoric_defconfig
-          
-          echo "=== 2. Оновлення конфігурації під поточне ядро ==="
-          make O=out ARCH=arm64 CC=clang olddefconfig
-          
-          echo "=== 3. Повна збірка ядра ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-Stable
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
