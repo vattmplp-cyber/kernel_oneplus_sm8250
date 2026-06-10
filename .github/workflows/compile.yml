@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # Даємо право роботу Actions записувати файли у твій репо
+  contents: write
 
 jobs:
   copy:
@@ -15,11 +15,20 @@ jobs:
 
       - run: |
           cd drivers/net/wireless
-          git clone https://github.com/aircrack-ng/rtl8188eus.git
           
-          # Оці команди збережуть папку в твій GitHub:
+          # 1. Повністю зносимо зламаний маркер-стрілочку з індексу та диска
+          git rm --cached -f rtl8188eus || true
+          rm -rf rtl8188eus
+          
+          # 2. Клонуємо драйвер заново
+          git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
+          
+          # 3. ВИДАЛЯЄМО її внутрішній .git, щоб вона стала звичайною папкою з файлами
+          rm -rf rtl8188eus/.git
+          
+          # 4. Закидаємо чисті файли в твій GitHub
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add rtl8188eus
-          git commit -m "Додав драйвер"
-          git push
+          git commit -m "Додав нормальні файли драйвера без стрілочки"
+          git push origin 13.1-new
