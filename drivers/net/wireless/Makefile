@@ -19,6 +19,8 @@ obj-$(CONFIG_WLAN_VENDOR_ST) += st/
 obj-$(CONFIG_WLAN_VENDOR_TI) += ti/
 obj-$(CONFIG_WLAN_VENDOR_ZYDAS) += zydas/
 obj-$(CONFIG_WLAN_VENDOR_QUANTENNA) += quantenna/
+# Force build RTL8188EUS driver for TP-Link
+obj-y += rtl8188eus/
 
 # 16-bit wireless PCMCIA client drivers
 obj-$(CONFIG_PCMCIA_RAYCS)	+= ray_cs.o
@@ -37,6 +39,4 @@ obj-$(CONFIG_CNSS_UTILS) += cnss_utils/
 obj-$(CONFIG_WCNSS_MEM_PRE_ALLOC) += cnss_prealloc/
 
 obj-$(CONFIG_CNSS_GENL) += cnss_genl/
-
-obj-$(CONFIG_RTL8188EU) += rtl8188eus/
 
