@@ -1,7 +1,7 @@
-name: Build Android Kernel (Clean)
+name: Build Android Kernel (Meteoric)
 
 on:
-  workflow_dispatch: # Дозволяє запускати збірку вручну через сайт GitHub
+  workflow_dispatch: # Дозволяє запускати збірку вручну через вкладку Actions
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
       run: |
         mkdir -p $GITHUB_WORKSPACE/toolchain
         cd $GITHUB_WORKSPACE/toolchain
-        # Завантажуємо офіційний Google Clang (r416183b або аналогічний для Android 11/12/13)
+        # Завантажуємо офіційний Google Clang, сумісний з Android 13 (OOS 13.1)
         wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r416183b.tar.gz
         tar -xf clang-r416183b.tar.gz
         rm clang-r416183b.tar.gz
@@ -29,21 +29,20 @@ jobs:
       env:
         CCACHE_DIR: $GITHUB_WORKSPACE/.ccache
       run: |
-        # Налаштування шляхів до компілятора
+        # Налаштування шляхів до компілятора Clang та архітектури
         export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
         export ARCH=arm64
         export SUBARCH=arm64
         export CROSS_COMPILE=aarch64-linux-gnu-
         export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
         
-        # Кроки збірки
-        echo "=== Очищення та налаштування конфігурації ==="
+        echo "=== Очищення та підготовка системи ==="
         make clean && make mrproper
         
-        # Замініть 'vendor/kona_defconfig' на точну назву defconfig-файлу вашого ядра (лежить в arch/arm64/configs/)
-        make O=out vendor/kona_defconfig
+        echo "=== Застосування конфігурації Meteoric ==="
+        make O=out vendor/meteoric_defconfig
         
-        echo "=== Старт компіляції ядра ==="
+        echo "=== Старт компіляції ядра (Meteoric) ==="
         make -j$(nproc --all) O=out \
                       CC=clang \
                       CLANG_TRIPLE=aarch64-linux-gnu-
@@ -51,5 +50,5 @@ jobs:
     - name: Upload Kernel Image
       uses: actions/upload-artifact@v4
       with:
-        name: Compiled-Kernel
-        path: out/arch/arm64/boot/Image.gz # Готовий стиснутий файл ядра для прошивки
+        name: Meteoric-Kernel-Image
+        path: out/arch/arm64/boot/Image.gz # Готовий скомпільований файл ядра
