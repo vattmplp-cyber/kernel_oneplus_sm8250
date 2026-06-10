@@ -1,17 +1,45 @@
-name: Copy RTL8188EUS Driver
+name: Copy RTL8188EUS Driver to Repo
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write # Даємо права роботу Actions записувати файли у твій репозиторій
+
 jobs:
-  copy-driver:
+  copy-and-push:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
           ref: 13.1-new
+          fetch-depth: 0
 
-      - name: Download and Copy Driver
+      - name: Download and Inject Driver
         run: |
           cd drivers/net/wireless
+          
+          # Видаляємо стару папку, якщо вона є
+          rm -rf rtl8188eus
+          
+          # Клонуємо свіжий драйвер
           git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
+          
+          # Прописуємо конфіги
+          echo 'source "drivers/net/wireless/rtl8188eus/Kconfig"' >> Kconfig
+          echo 'obj-$(CONFIG_RTL8188EUS) += rtl8188eus/' >> Makefile
+
+      - name: Commit and Push to Git
+        run: |
+          # Налаштовуємо робота для коміту
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Додаємо нові файли драйвера та змінені Kconfig/Makefile
+          git add drivers/net/wireless/rtl8188eus
+          git add drivers/net/wireless/Kconfig
+          git add drivers/net/wireless/Makefile
+          
+          # Комітимо та пушимо в твою гілку
+          git commit -m "Inject RTL8188EUS driver into wireless drivers"
+          git push origin 13.1-new
