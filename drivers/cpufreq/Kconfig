@@ -113,6 +113,12 @@ config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
 
 endchoice
 
+config CPU_FREQ_GOV_HARDLOCK
+	tristate "'hardlock' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  This governor locks CPU frequencies to maximum and ignores inside kernel overrides.
+
 config CPU_FREQ_GOV_PERFORMANCE
 	tristate "'performance' governor"
 	help
