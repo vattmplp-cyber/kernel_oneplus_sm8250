@@ -18,8 +18,8 @@ jobs:
 
       - name: Download and Inject RTL8188EUS Driver
         run: |
-          # 1. Заходимо в папку бездротових драйверів
-          cd kernel_oneplus_sm8250/drivers/net/wireless
+          # 1. Заходимо в папку бездротових драйверів (вона в корні)
+          cd drivers/net/wireless
           
           # 2. Клонуємо репозиторій драйвера в папку rtl8188eus
           git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
@@ -30,8 +30,8 @@ jobs:
 
       - name: Configure Defconfig for TP-Link v2 (Monitor Mode)
         run: |
-          # Шлях до твого дефконфігу
-          DEFCONFIG_PATH="kernel_oneplus_sm8250/arch/arm64/configs/vendor/meteoric_defconfig"
+          # Шлях до твого дефконфігу без зайвого префікса папки
+          DEFCONFIG_PATH="arch/arm64/configs/vendor/meteoric_defconfig"
           
           # Дописуємо конфіги для підтримки USB-адаптерів та режимів моніторингу
           echo "CONFIG_NET=y" >> $DEFCONFIG_PATH
@@ -55,6 +55,10 @@ jobs:
           
           echo "=== 1. Створення конфігурації ==="
           make O=out vendor/meteoric_defconfig
+          
+          # Переконуємося, що ми вносимо зміни і в конфіг у папці out
+          echo "CONFIG_RTL8188EUS=y" >> out/.config
+          echo "CONFIG_RTL8188EUS_MONITOR=y" >> out/.config
           
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
