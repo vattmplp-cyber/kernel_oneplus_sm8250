@@ -1,4 +1,31 @@
-- name: Download RTL8188EUS Driver
-  run: |
-    cd drivers/net/wireless/
-    git clone https://github.com rtl8188eus
+name: Copy RTL8188EUS Driver
+
+on:
+  workflow_dispatch: # Запуск вручну кнопкою "Run workflow"
+
+jobs:
+  copy-driver:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Завантажуємо код вашого ядра
+    - name: Checkout Kernel Source
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    # 2. Скачуємо драйвер напряму у потрібну папку
+    - name: Download and Move Driver
+      run: |
+        cd drivers/net/wireless/
+        git clone https://github.com rtl8188eus
+        rm -rf rtl8188eus/.git # Видаляємо внутрішню гіт-історію самого драйвера
+
+    # 3. Зберігаємо папку назад у ваш GitHub форк
+    - name: Commit and Push Changes
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@://github.com"
+        git add drivers/net/wireless/rtl8188eus/
+        git commit -m "Add raw rtl8188eus driver folder" || echo "No changes to commit"
+        git push origin HEAD:${{ github.ref }}
