@@ -1,45 +1,11 @@
-name: Copy RTL8188EUS Driver
-
-on:
-workflow_dispatch:
-
-jobs:
-copy-driver:
-runs-on: ubuntu-latest
-
-```
-permissions:
-  contents: write
-
-steps:
-  - name: Checkout Kernel Source
-    uses: actions/checkout@v4
-
-  - name: Download Driver
-    run: |
-      mkdir -p drivers/net/wireless
-      cd drivers/net/wireless
-
-      rm -rf rtl8188eus
-
-      curl -L \
-        https://github.com/aircrack-ng/rtl8188eus/archive/refs/heads/v5.3.9.zip \
-        -o driver.zip
-
-      unzip -q driver.zip
-
-      mv rtl8188eus-v5.3.9 rtl8188eus
-
-      rm -f driver.zip
-
-  - name: Commit and Push
-    run: |
-      git config user.name "github-actions[bot]"
-      git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      git add drivers/net/wireless/rtl8188eus
-
-      git commit -m "Import rtl8188eus v5.3.9" || echo "No changes"
-
-      git push
-```
+- name: Download and Copy RTL8188EUS Driver
+        run: |
+          # 1. Переходимо в папку бездротових мереж
+          cd drivers/net/wireless
+          
+          # 2. Чисто копіюємо драйвер туди
+          git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
+          
+          # 3. Додаємо вказівники для збірщика
+          echo 'source "drivers/net/wireless/rtl8188eus/Kconfig"' >> Kconfig
+          echo 'obj-$(CONFIG_RTL8188EUS) += rtl8188eus/' >> Makefile
