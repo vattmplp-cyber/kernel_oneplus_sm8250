@@ -1,42 +1,45 @@
 name: Copy RTL8188EUS Driver
 
 on:
-  workflow_dispatch: # Запуск вручну кнопкою "Run workflow"
+workflow_dispatch:
 
 jobs:
-  copy-driver:
-    runs-on: ubuntu-latest
+copy-driver:
+runs-on: ubuntu-latest
 
-    steps:
-    # 1. Завантажуємо код вашого ядра
-    - name: Checkout Kernel Source
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+```
+permissions:
+  contents: write
 
-    # 2. Скачуємо драйвер як чистий архів через curl та розпаковуємо
-    - name: Download and Unzip Driver
-      run: |
-        cd drivers/net/wireless/
-        rm -rf rtl8188eus
-        
-        # Завантажуємо архів за допомогою curl (ігноруючи обмеження для роботів)
-        curl -L "https://github.com" -o driver.zip
-        
-        # Розпаковуємо архів
-        unzip driver.zip
-        
-        # Перейменовуємо розпаковану папку на правильну назву
-        mv rtl8188eus-master rtl8188eus
-        
-        # Видаляємо файл архіву, щоб він не займав місце в репозиторії
-        rm driver.zip
+steps:
+  - name: Checkout Kernel Source
+    uses: actions/checkout@v4
 
-    # 3. Зберігаємо папку назад у ваш GitHub форк
-    - name: Commit and Push Changes
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add drivers/net/wireless/rtl8188eus/
-        git commit -m "Add raw rtl8188eus driver folder via curl ZIP" || echo "No changes to commit"
-        git push origin HEAD:${{ github.ref }}
+  - name: Download Driver
+    run: |
+      mkdir -p drivers/net/wireless
+      cd drivers/net/wireless
+
+      rm -rf rtl8188eus
+
+      curl -L \
+        https://github.com/aircrack-ng/rtl8188eus/archive/refs/heads/v5.3.9.zip \
+        -o driver.zip
+
+      unzip -q driver.zip
+
+      mv rtl8188eus-v5.3.9 rtl8188eus
+
+      rm -f driver.zip
+
+  - name: Commit and Push
+    run: |
+      git config user.name "github-actions[bot]"
+      git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      git add drivers/net/wireless/rtl8188eus
+
+      git commit -m "Import rtl8188eus v5.3.9" || echo "No changes"
+
+      git push
+```
