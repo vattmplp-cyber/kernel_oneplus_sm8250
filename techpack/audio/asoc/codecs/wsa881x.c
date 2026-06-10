@@ -1373,6 +1373,13 @@ static int wsa881x_probe(struct snd_soc_component *component)
 static void wsa881x_remove(struct snd_soc_component *component)
 {
 	struct wsa881x_priv *wsa881x = snd_soc_component_get_drvdata(component);
+    // Додаємо вказівник на пристрій, щоб знати, звідки видаляти файл
+    struct swr_device *swr = wsa881x->swr_slave;
+
+    // 1. Видаляємо наш створений файл атрибута
+    if (swr) {
+        device_remove_file(&swr->dev, &dev_attr_speaker_gain);
+    }
 
 	if (wsa881x->tz_pdata.tz_dev)
 		wsa881x_deinit_thermal(wsa881x->tz_pdata.tz_dev);
