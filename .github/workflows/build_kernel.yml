@@ -1,75 +1,78 @@
 name: Build Meteoric Stable 13.1
+
 on:
+
   workflow_dispatch:
 
+
+
 jobs:
+
   build:
+
     runs-on: ubuntu-latest
+
     steps:
+
       - name: Checkout Source
+
         uses: actions/checkout@v4
+
         with:
+
           ref: 13.1-new # Переконайся, що твоя робоча гілка називається саме так
 
+
+
       - name: Setup Build Environment
+
         run: |
+
           sudo apt update
+
           sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
 
-      - name: Download and Inject RTL8188EUS Driver
-        run: |
-          # 1. Заходимо в папку бездротових драйверів (вона в корні)
-          cd drivers/net/wireless
-          
-          # 2. Клонуємо репозиторій драйвера в папку rtl8188eus
-          git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
-          
-          # 3. Реєструємо драйвер у Kconfig та Makefile
-          echo 'source "drivers/net/wireless/rtl8188eus/Kconfig"' >> Kconfig
-          echo 'obj-$(CONFIG_RTL8188EUS) += rtl8188eus/' >> Makefile
 
-      - name: Configure Defconfig for TP-Link v2 (Monitor Mode)
-        run: |
-          # Шлях до твого дефконфігу без зайвого префікса папки
-          DEFCONFIG_PATH="arch/arm64/configs/vendor/meteoric_defconfig"
-          
-          # Дописуємо конфіги для підтримки USB-адаптерів та режимів моніторингу
-          echo "CONFIG_NET=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_USB_SUPPORT=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_USB=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_USB_NET_DRIVERS=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_WIRELESS=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_CFG80211=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_MAC80211=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_NL80211_TESTMODE=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_CFG80211_WEXT=y" >> $DEFCONFIG_PATH
-          
-          # Вмикаємо сам драйвер Realtek та режим монітора для нього
-          echo "CONFIG_RTL8188EUS=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_RTL8188EUS_MONITOR=y" >> $DEFCONFIG_PATH
 
       - name: Build Kernel
+
         run: |
+
           export ARCH=arm64
+
           export CROSS_COMPILE=aarch64-linux-gnu-
+
           
+
           echo "=== 1. Створення конфігурації ==="
+
           make O=out vendor/meteoric_defconfig
+
           
-          # Переконуємося, що ми вносимо зміни і в конфіг у папці out
-          echo "CONFIG_RTL8188EUS=y" >> out/.config
-          echo "CONFIG_RTL8188EUS_MONITOR=y" >> out/.config
-          
+
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
+
           make O=out ARCH=arm64 CC=clang olddefconfig
+
           
+
           echo "=== 3. Повна збірка ядра ==="
+
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
+
+
       - name: Upload Kernel Artifacts
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: Meteoric-Kebab-Stable
+
           path: |
+
             out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
+
+            out/arch/arm64/boot/Image.gz 
+
