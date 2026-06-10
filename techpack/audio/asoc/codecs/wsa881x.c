@@ -114,7 +114,6 @@ struct wsa881x_priv {
 	struct dentry *debugfs_poke;
 	struct dentry *debugfs_reg_dump;
 	unsigned int read_data;
-    int spk_gain_offset; // Додай це поле
 };
 
 /* from bolero to WSA events */
@@ -1015,13 +1014,6 @@ static int wsa881x_ramp_pa_gain(struct snd_soc_component *component,
 	int val;
 
 	for (val = min_gain; max_gain <= val; val--) {
-		// Додаємо wsa881x->spk_gain_offset до значення, яке записується в регістр
-		int final_val = val + wsa881x->spk_gain_offset;
-		
-		// Захист: не даємо вийти за межі 0x00-0x0F (якщо регістр 4-бітний)
-		if (final_val > 0x0F) final_val = 0x0F;
-		if (final_val < 0) final_val = 0;
-		
 		snd_soc_component_update_bits(component, WSA881X_SPKR_DRV_GAIN,
 				    0xF0, val << 4);
 		/*
@@ -1097,7 +1089,7 @@ static int wsa881x_spkr_pa_event(struct snd_soc_dapm_widget *w,
 					      WSA881X_SPKR_DRV_EN,
 					      0x80, 0x80);
 		if (!wsa881x->comp_enable) {
-			max_gain = wsa881x->pa_gain + wsa881x->spk_gain_offset;
+			max_gain = wsa881x->pa_gain;
 			/*
 			 * Gain has to set incrementally in 4 steps
 			 * as per HW sequence
@@ -1328,21 +1320,6 @@ static int32_t wsa881x_temp_reg_read(struct snd_soc_component *component,
 	return 0;
 }
 
-static ssize_t speaker_gain_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct wsa881x_priv *wsa881x = dev_get_drvdata(dev);
-    return sprintf(buf, "%d\n", wsa881x->spk_gain_offset);
-}
-
-static ssize_t speaker_gain_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct wsa881x_priv *wsa881x = dev_get_drvdata(dev);
-    int val;
-    if (sscanf(buf, "%d", &val) != 1) return -EINVAL;
-    if (val < -10 || val > 3) return -EINVAL; // Твій безпечний ліміт
-    wsa881x->spk_gain_offset = val;
-    return count;
-}
-static DEVICE_ATTR(speaker_gain, 0664, speaker_gain_show, speaker_gain_store);
-
 static int wsa881x_probe(struct snd_soc_component *component)
 {
 	struct wsa881x_priv *wsa881x = snd_soc_component_get_drvdata(component);
@@ -1355,7 +1332,6 @@ static int wsa881x_probe(struct snd_soc_component *component)
 	dev = wsa881x->swr_slave;
 	wsa881x->component = component;
 	mutex_init(&wsa881x->bg_lock);
-	device_create_file(&dev->dev, &dev_attr_speaker_gain);
 	wsa881x_init(component);
 	snprintf(wsa881x->tz_pdata.name, sizeof(wsa881x->tz_pdata.name),
 		"%s.%x", "wsatz", (u8)dev->addr);
@@ -1373,13 +1349,6 @@ static int wsa881x_probe(struct snd_soc_component *component)
 static void wsa881x_remove(struct snd_soc_component *component)
 {
 	struct wsa881x_priv *wsa881x = snd_soc_component_get_drvdata(component);
-    // Додаємо вказівник на пристрій, щоб знати, звідки видаляти файл
-    struct swr_device *swr = wsa881x->swr_slave;
-
-    // 1. Видаляємо наш створений файл атрибута
-    if (swr) {
-        device_remove_file(&swr->dev, &dev_attr_speaker_gain);
-    }
 
 	if (wsa881x->tz_pdata.tz_dev)
 		wsa881x_deinit_thermal(wsa881x->tz_pdata.tz_dev);
@@ -1495,7 +1464,6 @@ static int wsa881x_swr_probe(struct swr_device *pdev)
 {
 	int ret = 0;
 	struct wsa881x_priv *wsa881x;
-	
 	u8 devnum = 0;
 	bool pin_state_current = false;
 	struct wsa_ctrl_platform_data *plat_data = NULL;
@@ -1504,11 +1472,6 @@ static int wsa881x_swr_probe(struct swr_device *pdev)
 			    GFP_KERNEL);
 	if (!wsa881x)
 		return -ENOMEM;
-
-	/* --- ОСЬ ТУТ ТВОЄ ДОПОВНЕННЯ --- */
-	wsa881x->spk_gain_offset = 0; 
-	/* ------------------------------ */
-
 	wsa881x->wsa_rst_np = of_parse_phandle(pdev->dev.of_node,
 					     "qcom,spkr-sd-n-node", 0);
 	if (!wsa881x->wsa_rst_np) {
