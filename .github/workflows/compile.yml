@@ -1,34 +1,50 @@
-name: Copy Driver
+name: Build Meteoric Stable 13.1 g
+
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  copy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source
+        uses: actions/checkout@v4
         with:
           ref: 13.1-new
 
-      - run: |
-          cd drivers/net/wireless
+      - name: Setup Build Environment
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
+
+      - name: Build Kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
           
-          # 1. Повністю зносимо зламаний маркер-стрілочку з індексу та диска
-          git rm --cached -f rtl8188eus || true
-          rm -rf rtl8188eus
+          echo "=== 1. Створення базової конфігурації ==="
+          make O=out vendor/meteoric_defconfig
           
-          # 2. Клонуємо драйвер заново
-          git clone https://github.com/aircrack-ng/rtl8188eus.git rtl8188eus
+          echo "=== 1.5. Примусове впорскування драйвера RTL8188EUS ==="
+          echo "CONFIG_WIRELESS=y" >> out/.config
+          echo "CONFIG_CFG80211=y" >> out/.config
+          echo "CONFIG_CFG80211_WEXT=y" >> out/.config
+          echo "CONFIG_RTL8188EUS=y" >> out/.config
+          echo "CONFIG_RTL8188EUS_MONITOR=y" >> out/.config
           
-          # 3. ВИДАЛЯЄМО її внутрішній .git, щоб вона стала звичайною папкою з файлами
-          rm -rf rtl8188eus/.git
+          echo "=== 2. Оновлення конфігурації під поточне ядро ==="
+          make O=out ARCH=arm64 CC=clang olddefconfig
           
-          # 4. Закидаємо чисті файли в твій GitHub
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add rtl8188eus
-          git commit -m "Додав нормальні файли драйвера без стрілочки"
-          git push origin 13.1-new
+          echo "=== ХИТРІСТЬ: Тестова збірка НАШОГО ДРАЙВЕРА в першу чергу ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/net/wireless/rtl8188eus/
+          
+          echo "=== 3. Повна збірка всього іншого ядра ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Meteoric-Kebab-Stable
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
