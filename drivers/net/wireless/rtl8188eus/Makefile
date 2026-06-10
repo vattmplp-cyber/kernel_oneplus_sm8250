@@ -98,9 +98,9 @@ CONFIG_RTW_SDIO_PM_KEEP_POWER = y
 ###################### MP HW TX MODE FOR VHT #######################
 CONFIG_MP_VHT_HW_TX_MODE = n
 ###################### Platform Related #######################
-CONFIG_PLATFORM_I386_PC = y
+CONFIG_PLATFORM_I386_PC = n
 CONFIG_PLATFORM_ARM_RPI = n
-CONFIG_PLATFORM_ARM64_RPI = n
+CONFIG_PLATFORM_ARM64_RPI = y
 CONFIG_PLATFORM_ANDROID_X86 = n
 CONFIG_PLATFORM_ANDROID_INTEL_X86 = n
 CONFIG_PLATFORM_JB_X86 = n
@@ -2117,17 +2117,17 @@ config_r:
 .PHONY: modules clean
 
 clean:
-	#$(MAKE) -C $(KSRC) M=$(shell pwd) clean
-	cd hal ; rm -fr */*/*/*.mod.c */*/*/*.mod */*/*/*.o */*/*/.*.cmd */*/*/*.ko
-	cd hal ; rm -fr */*/*.mod.c */*/*.mod */*/*.o */*/.*.cmd */*/*.ko
-	cd hal ; rm -fr */*.mod.c */*.mod */*.o */.*.cmd */*.ko
-	cd hal ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
-	cd core ; rm -fr */*.mod.c */*.mod */*.o */.*.cmd */*.ko
-	cd core ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
-	cd os_dep/linux ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
-	cd os_dep ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
-	cd platform ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
-	rm -fr Module.symvers ; rm -fr Module.markers ; rm -fr modules.order
-	rm -fr *.mod.c *.mod *.o .*.cmd *.ko *~
-	rm -fr .tmp_versions
+#	#$(MAKE) -C $(KSRC) M=$(shell pwd) clean
+#	cd hal ; rm -fr */*/*/*.mod.c */*/*/*.mod */*/*/*.o */*/*/.*.cmd */*/*/*.ko
+#	cd hal ; rm -fr */*/*.mod.c */*/*.mod */*/*.o */*/.*.cmd */*/*.ko
+#	cd hal ; rm -fr */*.mod.c */*.mod */*.o */.*.cmd */*.ko
+#	cd hal ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
+#	cd core ; rm -fr */*.mod.c */*.mod */*.o */.*.cmd */*.ko
+#	cd core ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
+#	cd os_dep/linux ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
+#	cd os_dep ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
+#	cd platform ; rm -fr *.mod.c *.mod *.o .*.cmd *.ko
+#	rm -fr Module.symvers ; rm -fr Module.markers ; rm -fr modules.order
+#	rm -fr *.mod.c *.mod *.o .*.cmd *.ko *~
+#	rm -fr .tmp_versions
 endif
