@@ -1,0 +1,4 @@
+- name: Download RTL8188EUS Driver
+  run: |
+    cd drivers/net/wireless/
+    git clone https://github.com rtl8188eus
