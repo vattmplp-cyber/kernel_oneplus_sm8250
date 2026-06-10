@@ -14,10 +14,11 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    # 2. Скачуємо драйвер напряму у потрібну папку
+    # 2. Очищаємо стару папку та скачуємо драйвер заново
     - name: Download and Move Driver
       run: |
         cd drivers/net/wireless/
+        rm -rf rtl8188eus # ПРИМУСОВО ВИДАЛЯЄМО СТАРУ ПАПКУ, ЩОБ НЕ БУЛО ПОМИЛКИ 128
         git clone https://github.com rtl8188eus
         rm -rf rtl8188eus/.git # Видаляємо внутрішню гіт-історію самого драйвера
 
