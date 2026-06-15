@@ -1,0 +1,45 @@
+name: Compile KConsole Module Only
+
+on:
+  push:
+    paths:
+      - 'drivers/misc/kconsole/**'
+  workflow_dispatch:
+
+jobs:
+  build-module:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          ref: 13.1-new  # Твоя робоча гілка
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
+
+      - name: Compile Module Only
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          echo "=== 1. Генеруємо базу з твого вже готового дефконфігу ==="
+          make O=out vendor/meteoric_defconfig
+          
+          echo "=== 2. Оновлюємо конфігурацію ==="
+          make O=out ARCH=arm64 CC=clang olddefconfig
+          
+          echo "=== 3. Швидка підготовка інфраструктури ядра ==="
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip modules_prepare
+          
+          echo "=== 4. Збірка тільки нашого модуля .ko ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip M=drivers/misc/kconsole/
+
+      - name: Upload KConsole Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kconsole-module
+          path: out/drivers/misc/kconsole/kconsole.ko
