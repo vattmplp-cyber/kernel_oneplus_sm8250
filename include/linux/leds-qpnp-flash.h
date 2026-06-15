@@ -28,15 +28,10 @@ static inline int qpnp_flash_led_prepare(struct led_trigger *trig, int options,
 }
 #endif
 
-#ifdef CONFIG_BACKLIGHT_QCOM_SPMI_WLED
+// === ВИПРАВЛЕНО ТУТ ===
+// Ми повністю прибираємо #ifdef / #else розгалуження, залишаючи лише один чистий прототип.
+// Тепер компілятор завжди знатиме, що функція існує у файлі qcom-spmi-wled.c
 int wled_flash_led_prepare(struct led_trigger *trig, int options,
 					int *max_current);
-#else
-static inline int wled_flash_led_prepare(struct led_trigger *trig, int options,
-					int *max_current)
-{
-	return -EINVAL;
-}
-#endif
 
 #endif
