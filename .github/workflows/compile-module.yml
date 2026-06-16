@@ -32,9 +32,13 @@ jobs:
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Пряма збірка модуля (Kbuild сам підготує все необхідне) ==="
-          # Збираємо модуль за допомогою відносного шляху. 
-          # Kbuild автоматично згенерує скрипти та bounds.h всередині out/ перед компіляцією драйвера.
+          echo "=== 3. Створення необхідних архітектурних заголовочних файлів (Fix asm/types.h) ==="
+          # prepare0 та scripts створюють усі динамічні лінки для asm, uapi та генерують інструменти збірки
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            scripts prepare0
+          
+          echo "=== 4. Збірка тільки нашого модуля .ko ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             M=drivers/misc/kconsole modules
@@ -43,5 +47,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kconsole-module
-          # Вказуємо шлях до згенерованого файлу всередині папки out
           path: out/drivers/misc/kconsole/kconsole.ko
