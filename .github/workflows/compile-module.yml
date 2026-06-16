@@ -29,11 +29,9 @@ jobs:
           echo "=== 1. Створення базової конфігурації ==="
           make ARCH=arm64 CC=clang vendor/meteoric_defconfig
           
-          echo "=== 2. Примусове увімкнення модуля ==="
-          # Автоматично знаходимо назву опції KConsole у Makefile та вмикаємо її як модуль (=m)
-          KCONF_NAME=$(grep -o 'CONFIG_[A-Z0-9_]*KCONSOLE[A-Z0-9_]*' drivers/misc/Makefile | head -n 1 || echo "CONFIG_KCONSOLE")
-          echo "Знайдено опцію конфігурації: $KCONF_NAME"
-          ./scripts/config --module "$KCONF_NAME"
+          echo "=== 2. Автоматична модифікація файлу drivers/misc/Makefile ==="
+          # Цей рядок сам допише потрібну команду у файл під час роботи GitHub Actions
+          echo "obj-m += kconsole/" >> drivers/misc/Makefile
           
           echo "=== 3. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
