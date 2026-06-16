@@ -32,7 +32,10 @@ jobs:
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Збірка модуля (Kbuild автоматично підготує інфраструктуру) ==="
+          echo "=== 3. Генерація внутрішніх інструментів та лінків архітектури ==="
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip scripts
+          
+          echo "=== 4. Збірка тільки нашого модуля .ko ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             M=${{ github.workspace }}/drivers/misc/kconsole modules
