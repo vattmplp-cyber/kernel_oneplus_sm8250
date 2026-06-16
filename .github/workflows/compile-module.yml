@@ -21,18 +21,6 @@ jobs:
           sudo apt update
           sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
 
-      - name: Inject Fix into Module Makefile
-        run: |
-          echo "=== Автоматична модифікація локального Makefile модуля ==="
-          # Додаємо прапорці компілятора прямо в Makefile модуля.
-          # Вони примусово застосуються і до kconsole.o, і до автоматичного kconsole.mod.o.
-          echo "" >> drivers/misc/kconsole/Makefile
-          echo "ccflags-y += -include linux/module.h -DMODULE_ARCH_INIT={}" >> drivers/misc/kconsole/Makefile
-          echo "CFLAGS_REMOVE_kconsole.mod.o += -Werror" >> drivers/misc/kconsole/Makefile
-          
-          echo "=== Вміст локального Makefile після змін: ==="
-          cat drivers/misc/kconsole/Makefile
-
       - name: Compile Module Only
         run: |
           export ARCH=arm64
@@ -41,31 +29,34 @@ jobs:
           echo "=== 1. Створення базової конфігурації ==="
           make ARCH=arm64 CC=clang vendor/meteoric_defconfig
           
-          echo "=== 2. Автоматична модифікація головного Makefile ==="
-          # Якщо у вашому минулому workflow був скрипт для додавання kconsole у drivers/misc/Makefile,
-          # він виконається тут автоматично або підхопиться з дерева коду.
-          
-          echo "=== 3. Оновлення конфігурації ==="
+          echo "=== 2. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 4. Підготовка середовища ядра ==="
+          echo "=== 3. Примусове генерування заголовочних файлів ядра ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             prepare
           
-          echo "=== 4.5. Збірка внутрішніх скриптів та утиліти modpost ==="
+          echo "=== 3.5. Збірка утиліти modpost ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             scripts
           
-          echo "=== 5. Збірка модуля через класичний M= ==="
-          # Завдяки тому, що ccflags-y тепер прописаний у локальному Makefile,
-          # компілятор Clang залізобетонно отримає опис структури та макросу!
+          echo "=== 4. ЯДЕРНИЙ ФІКС: Взлом скрипта modpost ==="
+          # Ми прописуємо прапорці компілятора безпосередньо у внутрішній скрипт Kbuild.
+          # Тепер ядро фізично не зможе їх проігнорувати на етапі збірки .mod.c файлу!
+          echo "" >> scripts/Makefile.modpost
+          echo 'CFLAGS_MODULE += -include linux/module.h -DMODULE_ARCH_INIT={}' >> scripts/Makefile.modpost
+          echo 'KBUILD_CFLAGS_MODULE += -include linux/module.h -DMODULE_ARCH_INIT={}' >> scripts/Makefile.modpost
+          
+          echo "=== 5. Примусова збірка зовнішнього модуля ==="
+          # Додаємо CONFIG_KCONSOLE=m, щоб ядро не пропустило папку, і запускаємо збірку.
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CONFIG_KCONSOLE=m \
             M=drivers/misc/kconsole modules
             
-          echo "=== Перевірка наявності згенерованого файлу ==="
+          echo "=== 6. Перевірка наявності файлу ==="
           ls -la drivers/misc/kconsole/
 
       - name: Upload KConsole Artifact
