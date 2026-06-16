@@ -21,16 +21,6 @@ jobs:
           sudo apt update
           sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
 
-      - name: Inject Kbuild Module Fix
-        run: |
-          echo "=== Фікс для повноцінної ініціалізації модулів ==="
-          # Прописуємо чітке синтаксичне значення для arm64 і примусово підключаємо опис 'struct module'
-          echo "" >> include/linux/export.h
-          echo "#include <linux/module.h>" >> include/linux/export.h
-          echo "#ifndef MODULE_ARCH_INIT" >> include/linux/export.h
-          echo "#define MODULE_ARCH_INIT {}" >> include/linux/export.h
-          echo "#endif" >> include/linux/export.h
-
       - name: Compile Module Only
         run: |
           export ARCH=arm64
@@ -42,7 +32,7 @@ jobs:
           echo "=== 2. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Примусове генерування заголовочних файлів ==="
+          echo "=== 3. Примусове генерування ВСІХ заголовочних файлів ядра ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             prepare
@@ -52,11 +42,13 @@ jobs:
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             scripts
           
-          echo "=== 4. Збірка самого модуля ==="
+          echo "=== 4. Стабільна збірка модуля через внутрішній Kbuild ==="
+          # Замість примхливого M= ми кажемо ядру зібрати конкретну підпапку як внутрішній модуль.
+          # Це примусово прокине всі необхідні прапорці та усуне помилку 'MODULE_ARCH_INIT' у .mod.c
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            M=drivers/misc/kconsole modules
-
+            drivers/misc/kconsole/
+            
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
         with:
