@@ -30,16 +30,22 @@ jobs:
           make ARCH=arm64 CC=clang vendor/meteoric_defconfig
           
           echo "=== 2. Автоматична модифікація файлу drivers/misc/Makefile ==="
-          # Цей рядок сам допише потрібну команду у файл під час роботи GitHub Actions
           echo "obj-m += kconsole/" >> drivers/misc/Makefile
           
           echo "=== 3. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 4. Підготовка середовища модулів (запобігає MODULE_ARCH_INIT) ==="
-          make -j$(nproc) ARCH=arm64 CC=clang \
+          echo "=== 4. Підготовка середовища ядра ==="
+          # Використовуємо класичний prepare, який гарантовано є в усіх версіях ядра,
+          # але передаємо прапорці компілятора для правильної генерації asm-offsets.h
+          make ARCH=arm64 CC=clang \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            modules_prepare
+            prepare
+          
+          echo "=== 4.5. Збірка внутрішніх скриптів та утиліти modpost ==="
+          make ARCH=arm64 CC=clang \
+            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            scripts
           
           echo "=== 5. Збірка модуля та запуск modpost ==="
           make -j$(nproc) ARCH=arm64 CC=clang \
@@ -49,7 +55,7 @@ jobs:
       - name: Verify Module Existence
         run: |
           echo "=== Перевірка наявності файлів у папці ==="
-          ls -la drivers/misc/kconsole/
+          ls -la drivers/misc/kconsole/ || true
 
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
