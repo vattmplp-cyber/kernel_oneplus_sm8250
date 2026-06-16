@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: 13.1-new  # Твоя робоча гілка
+          ref: 13.1-new
 
       - name: Setup Build Environment
         run: |
@@ -32,10 +32,11 @@ jobs:
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Повна підготовка інфраструктури модулів ==="
-          # Викликаємо з кореня з прапорами компілятора — це згенерує bounds.h та timeconst.h
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip modules_prepare
+          echo "=== 3. Повна підготовка дерева ядра до збірки модулів ==="
+          # Ця команда автоматично згенерує bounds.h, timeconst.h, asm-offsets.h та всі необхідні скрипти збірки
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            modules_prepare
           
           echo "=== 4. Збірка тільки нашого модуля .ko ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
@@ -46,4 +47,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kconsole-module
-          path: drivers/misc/kconsole/kconsole.ko
+          # Вказано правильний шлях всередині папки out, де Kbuild створює .ko файл
+          path: out/drivers/misc/kconsole/kconsole.ko
