@@ -42,13 +42,16 @@ jobs:
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             scripts
           
-          echo "=== 4. Стабільна збірка модуля через внутрішній Kbuild ==="
-          # Замість примхливого M= ми кажемо ядру зібрати конкретну підпапку як внутрішній модуль.
-          # Це примусово прокине всі необхідні прапорці та усуне помилку 'MODULE_ARCH_INIT' у .mod.c
+          echo "=== 4. Точкова збірка модуля через внутрішній Kbuild ==="
+          # Змінено таргет з папки на конкретний файл .ko
+          # Це активує правило з твого Makefile і запустить фінальну склейку модуля через modpost
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            drivers/misc/kconsole/
+            drivers/misc/kconsole/kconsole.ko
             
+          echo "=== Перевірка наявності файлу ==="
+          ls -la drivers/misc/kconsole/
+
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
         with:
