@@ -21,6 +21,15 @@ jobs:
           sudo apt update
           sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
 
+      - name: Inject Kbuild Module Fix
+        run: |
+          echo "=== Фікс для обходу помилки MODULE_ARCH_INIT ==="
+          # Додаємо визначення макросу в кінець системного export.h, який точно бачить .mod.c файл
+          echo "" >> include/linux/export.h
+          echo "#ifndef MODULE_ARCH_INIT" >> include/linux/export.h
+          echo "#define MODULE_ARCH_INIT" >> include/linux/export.h
+          echo "#endif" >> include/linux/export.h
+
       - name: Compile Module Only
         run: |
           export ARCH=arm64
@@ -42,12 +51,10 @@ jobs:
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             scripts
           
-          echo "=== 4. Збірка самого модуля з фіксом макросів ==="
-          # Ми передаємо KCFLAGS="-DMODULE", що примусово лікує помилку "MODULE_ARCH_INIT"
-          # і змушує Kbuild скомпілювати саме файл kconsole.ko
+          echo "=== 4. Збірка самого модуля ==="
+          # Тепер modpost згенерує kconsole.mod.c, а наш інжект у export.h успішно закриє помилку структури
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            KCFLAGS="-DMODULE" \
             M=drivers/misc/kconsole modules
 
       - name: Upload KConsole Artifact
