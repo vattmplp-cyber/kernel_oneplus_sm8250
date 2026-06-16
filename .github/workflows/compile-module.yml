@@ -32,8 +32,14 @@ jobs:
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Генерація внутрішніх інструментів та лінків архітектури ==="
+          echo "=== 3. Генерація базових скриптів ==="
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip scripts
+          
+          echo "=== 3.5. Примусова генерація missing заголовочних файлів ==="
+          # Генеруємо bounds.h, timeconst.h та asm-offsets.h напряму через їхні внутрішні таргети
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- include/generated/bounds.h
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- include/generated/timeconst.h
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- arch/arm64/kernel/asm-offsets.s
           
           echo "=== 4. Збірка тільки нашого модуля .ko ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
