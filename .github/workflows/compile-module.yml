@@ -33,14 +33,17 @@ jobs:
           make ARCH=arm64 CC=clang olddefconfig
           
           echo "=== 3. Примусове генерування ВСІХ заголовочних файлів ядра ==="
-          # Використовуємо універсальний таргет "prepare", який гарантовано прописаний у твоєму Makefile.
-          # Він згенерує абсолютно всі asm, uapi файли та скрипти.
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             prepare
           
+          echo "=== 3.5. Збірка утиліти modpost для лінкування модулів ==="
+          # Ця команда гарантовано збере інструмент scripts/mod/modpost, якого не вистачало
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            scripts
+          
           echo "=== 4. Збірка самого модуля ==="
-          # Тепер дерево повністю готове, і ми спокійно збираємо наш .ko файл
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             M=drivers/misc/kconsole modules
