@@ -32,15 +32,14 @@ jobs:
           echo "=== 2. Оновлюємо конфігурацію ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Повна підготовка інфраструктури та заголовків ==="
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip prepare
+          echo "=== 3. Швидка підготовка інфраструктури (генерація bounds.h, asm-offsets.h тощо) ==="
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip modules_prepare
           
-          echo "=== 4. Збірка тільки нашого модуля .ko ==="
-          make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip M=../drivers/misc/kconsole -C out modules
+          echo "=== 4. Збірка тільки нашого модуля .ko через прапор M ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip M=${{ github.workspace }}/drivers/misc/kconsole modules
 
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kconsole-module
           path: out/drivers/misc/kconsole/kconsole.ko
-          
