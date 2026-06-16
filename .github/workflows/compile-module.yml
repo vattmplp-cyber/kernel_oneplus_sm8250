@@ -32,7 +32,7 @@ jobs:
           echo "=== 2. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Примусове генерування ВСІХ заголовочних файлів ядра ==="
+          echo "=== 3. Примусове генерування заголовочних файлів ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             prepare
@@ -42,13 +42,14 @@ jobs:
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             scripts
           
-          echo "=== 4. Стабільна збірка модуля через внутрішній Kbuild ==="
-          # Замість примхливого M= ми кажемо ядру зібрати конкретну підпапку як внутрішній модуль.
-          # Це примусово прокине всі необхідні прапорці та усуне помилку 'MODULE_ARCH_INIT' у .mod.c
+          echo "=== 4. Збірка самого модуля з фіксом макросів ==="
+          # Ми передаємо KCFLAGS="-DMODULE", що примусово лікує помилку "MODULE_ARCH_INIT"
+          # і змушує Kbuild скомпілювати саме файл kconsole.ko
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            drivers/misc/kconsole/
-            
+            KCFLAGS="-DMODULE" \
+            M=drivers/misc/kconsole modules
+
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
         with:
