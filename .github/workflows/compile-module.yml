@@ -27,21 +27,20 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           
           echo "=== 1. Створення базової конфігурації ==="
-          # Збираємо конфіг прямо в колір ядра
           make ARCH=arm64 CC=clang vendor/meteoric_defconfig
           
           echo "=== 2. Оновлення конфігурації ==="
           make ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Повна підготовка дерева ядра (Fix asm/types.h) ==="
-          # Важливо: запускаємо генерацію скриптів та asm-файлів БЕЗ параметру M=
-          # Це змусить Makefile створити всі необхідні arch/arm64/include/generated/ файли
-          make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+          echo "=== 3. Примусове генерування ВСІХ заголовочних файлів ядра ==="
+          # Використовуємо універсальний таргет "prepare", який гарантовано прописаний у твоєму Makefile.
+          # Він згенерує абсолютно всі asm, uapi файли та скрипти.
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            modules_prepare
+            prepare
           
           echo "=== 4. Збірка самого модуля ==="
-          # Тепер, коли все дерево готове, викликаємо збірку нашого драйвера
+          # Тепер дерево повністю готове, і ми спокійно збираємо наш .ko файл
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             M=drivers/misc/kconsole modules
@@ -50,5 +49,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kconsole-module
-          # Файл буде лежати в оригінальній папці драйвера
           path: drivers/misc/kconsole/kconsole.ko
