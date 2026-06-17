@@ -98,7 +98,7 @@ static const struct file_operations exec_fops = { .owner = THIS_MODULE, .write =
 #endif
 
 static int __init kernel_exec_init(void) {
-    proc_file = proc_create(PROC_NAME, 0666, NULL, &exec_fops);
+    proc_file = proc_create(PROC_NAME, 0600, NULL, &exec_fops);
     if (!proc_file) return -ENOMEM;
     return 0;
 }
