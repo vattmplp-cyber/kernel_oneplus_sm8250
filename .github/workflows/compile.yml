@@ -25,32 +25,26 @@ jobs:
           echo "=== 1. Створення базової конфігурації ==="
           make O=out vendor/meteoric_defconfig
           
-          echo "=== 1.2. АНТИ-ПІДПИСНИЙ БЛОК (Розблокування ядра) ==="
-          # Видаляємо всі згадки про підписи з конфігу, щоб Kbuild не вимагав їх
-          sed -i '/CONFIG_MODULE_SIG/d' out/.config
-          echo "# CONFIG_MODULE_SIG is not set" >> out/.config
-          echo "# CONFIG_MODULE_SIG_FORCE is not set" >> out/.config
-          echo "# CONFIG_MODULE_SIG_ALL is not set" >> out/.config
+          echo "=== 1.5. Примусове впорскування драйвера RTL8188EUS ==="
+          echo "CONFIG_WIRELESS=y" >> out/.config
+          echo "CONFIG_CFG80211=y" >> out/.config
+          echo "CONFIG_CFG80211_WEXT=y" >> out/.config
+          echo "CONFIG_RTL8188EUS=y" >> out/.config
+          echo "CONFIG_RTL8188EUS_MONITOR=y" >> out/.config
           
-          echo "=== 1.5. Впорскування драйвера RTL8188EUS ==="
-          ./scripts/config --file out/.config --enable CONFIG_WIRELESS
-          ./scripts/config --file out/.config --enable CONFIG_CFG80211
-          ./scripts/config --file out/.config --enable CONFIG_CFG80211_WEXT
-          ./scripts/config --file out/.config --enable CONFIG_RTL8188EUS
-          ./scripts/config --file out/.config --enable CONFIG_RTL8188EUS_MONITOR
-          
-          echo "=== 2. Оновлення конфігурації ==="
+          echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
           
-          echo "=== 3. Повна збірка ядра ==="
-          # Збираємо все ядро разом із вбудованим драйвером
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+          echo "=== ХИТРІСТЬ: Тестова збірка НАШОГО ДРАЙВЕРА в першу чергу ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/net/wireless/rtl8188eus/
+          
+          echo "=== 3. Повна збірка всього іншого ядра ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Meteoric-Kebab-Stable-Unsigned
+          name: Meteoric-Kebab-Stable
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
