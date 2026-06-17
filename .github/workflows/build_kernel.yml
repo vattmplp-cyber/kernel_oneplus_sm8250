@@ -1,7 +1,18 @@
-- name: Search for CONFIG_MODULE_SIG
+name: Search Module Sig
+
+on:
+  workflow_dispatch:
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          ref: 13.1-new
+
+      - name: Search for CONFIG_MODULE_SIG
         run: |
           echo "=== ПОШУК УСІХ ЗГАДОК CONFIG_MODULE_SIG ==="
-          # -r: рекурсивний пошук
-          # -n: показати номер рядка
-          # -w: шукати ціле слово
           grep -rnw . -e "CONFIG_MODULE_SIG" | grep -v ".git/"
