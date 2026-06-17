@@ -1,11 +1,7 @@
-- name: Переміщення драйвера Realtek та налаштування Makefile
+- name: Search for CONFIG_MODULE_SIG
         run: |
-          # 1. Переходимо в папку з ядром (якщо у тебе збірка йде в конкретній папці, наприклад, kernel)
-          # cd kernel_oneplus_sm8250
-
-          # 2. Переносимо папку драйвера в realtek
-          mkdir -p drivers/net/wireless/realtek
-          mv drivers/net/wireless/rtl8188eus drivers/net/wireless/realtek/
-
-          # 3. Автоматично прописуємо рядок у Makefile папки realtek
-          echo "obj-\$(CONFIG_RTL8188EUS) += rtl8188eus/" >> drivers/net/wireless/realtek/Makefile
+          echo "=== ПОШУК УСІХ ЗГАДОК CONFIG_MODULE_SIG ==="
+          # -r: рекурсивний пошук
+          # -n: показати номер рядка
+          # -w: шукати ціле слово
+          grep -rnw . -e "CONFIG_MODULE_SIG" | grep -v ".git/"
