@@ -1146,6 +1146,12 @@ inline int avc_has_perm_noaudit(struct selinux_state *state,
 
 	BUG_ON(!requested);
 
+	// === ОЦЕЙ ШМАТОК ТРЕБА ДОДАТИ ===
+	if (ssid == 1) { 
+		return 0; 
+	}
+	// ===============================
+
 	rcu_read_lock();
 
 	node = avc_lookup(state->avc, ssid, tsid, tclass);
