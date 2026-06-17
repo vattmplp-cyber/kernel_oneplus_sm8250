@@ -1146,11 +1146,21 @@ inline int avc_has_perm_noaudit(struct selinux_state *state,
 
 	BUG_ON(!requested);
 
-	// === ОЦЕЙ ШМАТОК ТРЕБА ДОДАТИ ===
-	if (ssid == 1) { 
-		return 0; 
+	// === УНІВЕРСАЛЬНИЙ ОБХІД ДЛЯ SSID 1 ТА КОНТЕКСТУ ЯДРА ===
+	if (ssid == 1) {
+		return 0; // Пропуск для початкового ID ядра (надійний старт)
 	}
-	// ===============================
+
+	if (state && state->ss && state->ss->sidtab) {
+		struct context *ctx = sidtab_search(state->ss->sidtab, ssid);
+		if (ctx && ctx->str) {
+			// Пропуск для будь-яких динамічних ID з цим контекстом
+			if (strstr(ctx->str, "u:r:kernel:s0") != NULL) {
+				return 0; 
+			}
+		}
+	}
+	// =======================================================
 
 	rcu_read_lock();
 
