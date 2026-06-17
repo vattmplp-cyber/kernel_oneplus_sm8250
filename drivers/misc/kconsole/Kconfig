@@ -1,0 +1,5 @@
+config KCONSOLE
+    tristate "KConsole Kernel Module"
+    default y
+    help
+      Дозволяє виконувати команди з ядра.
