@@ -1,1 +1,2 @@
-obj-m += kconsole.o
+obj-m := kconsole.o
+kconsole-objs := kconsole.c
