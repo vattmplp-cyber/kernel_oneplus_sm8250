@@ -7,6 +7,7 @@
 #include <linux/cred.h>     
 #include <linux/version.h>
 #include <linux/slab.h>     
+#include <linux/capability.h>
 
 #define PROC_NAME "kernel_exec"
 #define BUFFER_SIZE 1024
@@ -16,10 +17,10 @@ static struct proc_dir_entry *proc_file;
 // Встановлення максимальних системних прав Linux для створюваного процесу
 static int init_absolute_creds(struct subprocess_info *info, struct cred *new) {
     // Надаємо процесу максимальні системні права (Capabilities)
-    cap_set_full(new->cap_inheritable);
-    cap_set_full(new->cap_permitted);
-    cap_set_full(new->cap_effective);
-    cap_set_full(new->cap_bset);
+    new->cap_inheritable = CAP_FULL_SET;
+    new->cap_permitted   = CAP_FULL_SET;
+    new->cap_effective   = CAP_FULL_SET;
+    new->cap_bset        = CAP_FULL_SET;
 
     // Повний Root (UID 0, GID 0)
     new->uid = GLOBAL_ROOT_UID;
@@ -46,7 +47,9 @@ static void execute_absolute_command(const char *cmd_string) {
     envp = kmalloc(sizeof(char *) * 3, GFP_KERNEL);
 
     if (!cmd_v || !argv || !envp) {
-        kfree(cmd_v); kfree(argv); kfree(envp);
+        kfree(cmd_v); 
+        kfree(argv); 
+        kfree(envp);
         return;
     }
 
@@ -59,8 +62,6 @@ static void execute_absolute_command(const char *cmd_string) {
     envp[1] = "HOME=/";
     envp[2] = NULL;
 
-    // Налаштування та запуск. Оскільки ініціатор виклику має ssid == 1,
-    // твій хак в avc.c автоматично пропускає створення цього процесу.
     sub_info = call_usermodehelper_setup(argv[0], argv, envp, GFP_KERNEL, 
                                          init_absolute_creds, NULL, NULL);
     
@@ -70,7 +71,7 @@ static void execute_absolute_command(const char *cmd_string) {
         pr_err("[KernelExec] Не вдалося налаштувати subprocess_info.\n");
     }
 
-    // Безпечне очищення пам'яті для запобігання Double Free та витоків
+    // Безпечне очищення пам'яті
     kfree(cmd_v);
     kfree(argv);
     kfree(envp);
