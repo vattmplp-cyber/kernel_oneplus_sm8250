@@ -1,1 +1,1 @@
-obj-y += kconsole.o
+obj-m += kconsole.o
