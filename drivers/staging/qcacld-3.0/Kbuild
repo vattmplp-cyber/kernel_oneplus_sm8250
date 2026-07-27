@@ -3419,6 +3419,3 @@ OBJS_DIRS := $(dir $(OBJS)) \
 CLEAN_DIRS := $(addsuffix *.o,$(sort $(OBJS_DIRS))) \
 	      $(addsuffix .*.o.cmd,$(sort $(OBJS_DIRS)))
 clean-files := $(CLEAN_DIRS)
-CONFIG_FEATURE_MONITOR_MODE_SUPPORT := y
-CONFIG_QCACLD_FEATURE_MNT_FILTER := y
-ccflags-y += -DCONFIG_FEATURE_MONITOR_MODE_SUPPORT
