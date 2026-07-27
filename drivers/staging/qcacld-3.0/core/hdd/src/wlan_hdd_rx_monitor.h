@@ -21,8 +21,7 @@
 
 struct ol_txrx_ops;
 
-#if defined(QCA_WIFI_QCA6290) || defined(QCA_WIFI_QCA6390) || \
-    defined(QCA_WIFI_QCA6490) || defined(QCA_WIFI_QCA6750)
+/* Прямі прототипи робочих функцій для будь-яких чипсетів */
 void hdd_monitor_set_rx_monitor_cb(struct ol_txrx_ops *txrx,
 				ol_txrx_rx_mon_fp rx_monitor_cb);
 
@@ -31,17 +30,5 @@ void hdd_rx_monitor_callback(ol_osif_vdev_handle vdev,
 				void *rx_status);
 
 int hdd_enable_monitor_mode(struct net_device *dev);
-#else
-static inline void hdd_monitor_set_rx_monitor_cb(struct ol_txrx_ops *txrx,
-					ol_txrx_rx_mon_fp rx_monitor_cb){ }
-static inline void hdd_rx_monitor_callback(ol_osif_vdev_handle vdev,
-				qdf_nbuf_t mpdu,
-				void *rx_status){ }
-static inline int hdd_enable_monitor_mode(struct net_device *dev)
-{
-	return 0;
-}
-#endif /* CONFIG_LITHIUM */
 
 #endif /* __WLAN_HDD_RX_MONITOR_H */
-
