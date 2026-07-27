@@ -55,7 +55,7 @@ include $(WLAN_CFG_OVERRIDE_FILE)
 $(warning "Overriding WLAN config with: $(shell cat $(WLAN_CFG_OVERRIDE_FILE))")
 endif
 
-include $(WLAN_ROOT)/configs/$(patsubst "%",%,$(CONFIG_QCA_CLD_WLAN_PROFILE))_defconfig
+include $(WLAN_ROOT)/configs/$(patsubst "%",%,$(_PROFILE))_defconfig
 
 ############ UAPI ############
 UAPI_DIR :=	uapi
@@ -3419,3 +3419,6 @@ OBJS_DIRS := $(dir $(OBJS)) \
 CLEAN_DIRS := $(addsuffix *.o,$(sort $(OBJS_DIRS))) \
 	      $(addsuffix .*.o.cmd,$(sort $(OBJS_DIRS)))
 clean-files := $(CLEAN_DIRS)
+CONFIG_FEATURE_MONITOR_MODE_SUPPORT := y
+CONFIG_QCACLD_FEATURE_MNT_FILTER := y
+ccflags-y += -DCONFIG_FEATURE_MONITOR_MODE_SUPPORT
