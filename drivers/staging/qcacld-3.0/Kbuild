@@ -59,6 +59,9 @@ ifeq ($(_PROFILE),)
 _PROFILE := default
 endif
 
+CONFIG_QCA_WIFI_MONITOR := y
+CONFIG_QCA_MONITOR_OFFLOAD := y
+
 include $(WLAN_ROOT)/configs/$(patsubst "%",%,$(_PROFILE))_defconfig
 
 ############ UAPI ############
