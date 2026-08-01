@@ -55,6 +55,10 @@ include $(WLAN_CFG_OVERRIDE_FILE)
 $(warning "Overriding WLAN config with: $(shell cat $(WLAN_CFG_OVERRIDE_FILE))")
 endif
 
+ifeq ($(_PROFILE),)
+_PROFILE := default
+endif
+
 include $(WLAN_ROOT)/configs/$(patsubst "%",%,$(_PROFILE))_defconfig
 
 ############ UAPI ############
