@@ -21,7 +21,6 @@
 #include <qdf_types.h>
 #include <qdf_nbuf.h>
 #include "dp_types.h"
-#include "dp_vdev.h"
 
 
 #define DP_TX_MAX_NUM_FRAGS 6
@@ -315,6 +314,15 @@ static inline void dp_tx_get_queue(struct dp_vdev *vdev,
 		  __func__, queue->desc_pool_id, queue->ring_id);
 }
 #else /* QCA_OL_TX_MULTIQ_SUPPORT */
+
+#ifndef DP_TX_GET_DESC_POOL_ID
+#define DP_TX_GET_DESC_POOL_ID(vdev) 0
+#endif
+
+#ifndef DP_TX_GET_RING_ID
+#define DP_TX_GET_RING_ID(vdev) 0
+#endif
+
 static inline void dp_tx_get_queue(struct dp_vdev *vdev,
 				   qdf_nbuf_t nbuf, struct dp_tx_queue *queue)
 {
