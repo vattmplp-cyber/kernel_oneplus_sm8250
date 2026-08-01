@@ -440,7 +440,7 @@ static inline void hal_srng_write_address_32_mb(struct hal_soc *hal_soc,
 						void __iomem *addr,
 						uint32_t value)
 {
-	hal_write_address_32_mb(hal_soc, addr, value, false);
+	hal_write_address_32_mb(hal_soc, addr, value);
 }
 #endif
 
