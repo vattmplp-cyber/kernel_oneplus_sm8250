@@ -59,6 +59,10 @@ ifeq ($(_PROFILE),)
 _PROFILE := default
 endif
 
+# Спочатку підключаємо основний дефконфіг:
+include $(WLAN_ROOT)/configs/$(patsubst "%",%,$(_PROFILE))_defconfig
+
+# А ВЖЕ ПІСЛЯ НЬОГО примусово вмикаємо моніторинг:
 CONFIG_QCA_WIFI_MONITOR := y
 CONFIG_QCA_MONITOR_OFFLOAD := y
 
