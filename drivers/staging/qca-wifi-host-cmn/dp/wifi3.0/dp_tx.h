@@ -21,6 +21,7 @@
 #include <qdf_types.h>
 #include <qdf_nbuf.h>
 #include "dp_types.h"
+#include "dp_vdev.h"
 
 
 #define DP_TX_MAX_NUM_FRAGS 6
