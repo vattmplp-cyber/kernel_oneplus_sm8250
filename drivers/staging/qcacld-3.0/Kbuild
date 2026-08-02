@@ -3428,6 +3428,7 @@ endif
 # Підключаємо лише необхідні допоміжні модулі HTC/CE без застарілого htt.o
 OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
 CFLAGS_cds_api.o += -DDP_TXRX_SOC_ATTACH
+OBJS += core/dp/txrx/ol_cfg.o
 
 # Module information used by KBuild framework
 obj-$(CONFIG_QCA_CLD_WLAN) += $(MODNAME).o
