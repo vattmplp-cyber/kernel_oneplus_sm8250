@@ -3427,6 +3427,7 @@ endif
 
 # Примусове підключення відсутніх об'єктних файлів
 OBJS += core/dp/txrx/ol_txrx.o
+OBJS += core/dp/txrx/ol_txrx_ipa.o
 OBJS += core/dp/txrx/ol_cfg.o
 OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
 
