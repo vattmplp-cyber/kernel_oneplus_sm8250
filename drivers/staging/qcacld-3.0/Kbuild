@@ -3425,20 +3425,8 @@ BUILD_TAG = "$(TIMESTAMP); cld:$(CLD_IDS); cmn:$(CMN_IDS);"
 CFLAGS_wlan_hdd_main.o += -DBUILD_TAG=\"$(BUILD_TAG)\"
 endif
 
-# Примусове підключення повного Legacy TXRX/DP стеку та CE
-OBJS += core/dp/txrx/ol_txrx.o
-OBJS += core/dp/txrx/ol_txrx_ipa.o
-OBJS += core/dp/txrx/ol_txrx_event.o
-OBJS += core/dp/txrx/ol_txrx_peer_find.o
-OBJS += core/dp/txrx/ol_txrx_flow_control.o
+# Підключаємо лише необхідні допоміжні модулі HTC/HTT/CE без дублювання DP/TXRX
 OBJS += core/dp/txrx/ol_txrx_legacy_flow_control.o
-OBJS += core/dp/txrx/ol_rx_reorder.o
-OBJS += core/dp/txrx/ol_rx_pn.o
-OBJS += core/dp/txrx/ol_rx_fwd.o
-OBJS += core/dp/txrx/ol_tx.o
-OBJS += core/dp/txrx/ol_tx_desc.o
-OBJS += core/dp/txrx/ol_tx_sched.o
-OBJS += core/dp/txrx/ol_tx_throttle.o
 OBJS += core/dp/txrx/ol_cfg.o
 OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
 OBJS += ../qca-wifi-host-cmn/htc/htt/htt.o
