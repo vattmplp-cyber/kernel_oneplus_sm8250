@@ -2196,6 +2196,14 @@ static int cnss_qca6290_shutdown(struct cnss_pci_data *pci_priv)
 	struct cnss_plat_data *plat_priv = pci_priv->plat_priv;
 	int do_force_wake = true;
 
+	/* --- Meteoric Fix: ignore idle shutdown to prevent Wi-Fi power collapse --- */
+	if (plat_priv && test_bit(CNSS_DRIVER_IDLE_SHUTDOWN, &plat_priv->driver_state)) {
+		cnss_pr_dbg("Bypassing CNSS_DRIVER_IDLE_SHUTDOWN\n");
+		clear_bit(CNSS_DRIVER_IDLE_SHUTDOWN, &plat_priv->driver_state);
+		return -EAGAIN;
+	}
+	/* -------------------------------------------------------------------------- */
+
 	cnss_pci_pm_runtime_resume(pci_priv);
 
 	ret = cnss_pci_call_driver_remove(pci_priv);
