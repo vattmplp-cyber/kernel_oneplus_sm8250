@@ -9348,27 +9348,10 @@ static void hdd_clear_rps_cpu_mask(struct hdd_context *hdd_ctx)
 static inline void hdd_pm_qos_update_cpu_mask(cpumask_t *mask,
 					      bool high_throughput)
 {
-	cpumask_set_cpu(0, mask);
-	cpumask_set_cpu(1, mask);
-	cpumask_set_cpu(2, mask);
-	cpumask_set_cpu(3, mask);
-
-	if (high_throughput) {
-		/* For high TPUT include GOLD mask also */
-		cpumask_set_cpu(4, mask);
-		cpumask_set_cpu(5, mask);
-		cpumask_set_cpu(6, mask);
-	}
 }
 
-#ifdef MSM_PLATFORM
-#define COPY_CPU_MASK(a, b) cpumask_copy(a, b)
-#define DUMP_CPU_AFFINE() hdd_info("Set cpu_mask %*pb for affine_cores", \
-			cpumask_pr_args(&hdd_ctx->pm_qos_req.cpus_affine))
-#else
-#define COPY_CPU_MASK(a, b) /* no-op*/
-#define DUMP_CPU_AFFINE() /* no-op*/
-#endif
+#define COPY_CPU_MASK(a, b) /* no-op */
+#define DUMP_CPU_AFFINE()   /* no-op */
 
 /**
  * hdd_pm_qos_update_request() - API to request for pm_qos
@@ -9380,10 +9363,8 @@ static inline void hdd_pm_qos_update_cpu_mask(cpumask_t *mask,
 static inline void hdd_pm_qos_update_request(struct hdd_context *hdd_ctx,
 					     cpumask_t *pm_qos_cpu_mask)
 {
-	COPY_CPU_MASK(&hdd_ctx->pm_qos_req.cpus_affine, pm_qos_cpu_mask);
-
 	/* Latency value to be read from INI */
-	if (cpumask_empty(pm_qos_cpu_mask))
+	if (pm_qos_cpu_mask && cpumask_empty(pm_qos_cpu_mask))
 		pm_qos_update_request(&hdd_ctx->pm_qos_req,
 				      PM_QOS_DEFAULT_VALUE);
 	else
@@ -9400,8 +9381,6 @@ static inline void hdd_pm_qos_update_request(struct hdd_context *hdd_ctx,
 static inline void hdd_update_pm_qos_affine_cores(struct hdd_context *hdd_ctx)
 {
 	hdd_ctx->pm_qos_req.type = PM_QOS_REQ_AFFINE_CORES;
-	qdf_cpumask_clear(&hdd_ctx->pm_qos_req.cpus_affine);
-	hdd_pm_qos_update_cpu_mask(&hdd_ctx->pm_qos_req.cpus_affine, false);
 }
 #else
 static inline void hdd_update_pm_qos_affine_cores(struct hdd_context *hdd_ctx)
@@ -9413,9 +9392,6 @@ static inline void hdd_pm_qos_add_request(struct hdd_context *hdd_ctx)
 	hdd_update_pm_qos_affine_cores(hdd_ctx);
 	pm_qos_add_request(&hdd_ctx->pm_qos_req, PM_QOS_CPU_DMA_LATENCY,
 			   PM_QOS_DEFAULT_VALUE);
-	DUMP_CPU_AFFINE();
-	hdd_info("Set cpu_mask %*pb for affine_cores",
-		 cpumask_pr_args(&hdd_ctx->pm_qos_req.cpus_affine));
 }
 
 static inline void hdd_pm_qos_remove_request(struct hdd_context *hdd_ctx)
