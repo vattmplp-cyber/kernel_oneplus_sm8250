@@ -238,7 +238,7 @@
 
 #define SRNG_REG_WRITE_CONFIRM(_srng, _reg, _value, _dir) \
 	hal_write_address_32_mb(_srng->hal_soc,\
-		SRNG_ ## _dir ## _ADDR(_srng, _reg), (_value))
+		SRNG_ ## _dir ## _ADDR(_srng, _reg), (_value), true)
 
 #define SRNG_REG_READ(_srng, _reg, _dir) \
 	hal_read_address_32_mb(_srng->hal_soc, \
