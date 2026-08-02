@@ -3425,6 +3425,11 @@ BUILD_TAG = "$(TIMESTAMP); cld:$(CLD_IDS); cmn:$(CMN_IDS);"
 CFLAGS_wlan_hdd_main.o += -DBUILD_TAG=\"$(BUILD_TAG)\"
 endif
 
+# Примусове підключення відсутніх об'єктних файлів
+OBJS += core/dp/txrx/ol_txrx.o
+OBJS += core/dp/txrx/ol_cfg.o
+OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
+
 # Module information used by KBuild framework
 obj-$(CONFIG_QCA_CLD_WLAN) += $(MODNAME).o
 $(MODNAME)-y := $(OBJS)
