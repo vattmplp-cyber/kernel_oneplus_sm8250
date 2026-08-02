@@ -3426,7 +3426,6 @@ CFLAGS_wlan_hdd_main.o += -DBUILD_TAG=\"$(BUILD_TAG)\"
 endif
 
 # Підключаємо лише необхідні допоміжні модулі HTC/CE без застарілого htt.o
-OBJS += core/dp/txrx/ol_txrx_legacy_flow_control.o
 OBJS += core/dp/txrx/ol_cfg.o
 OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
 
