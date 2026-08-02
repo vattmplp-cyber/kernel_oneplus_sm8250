@@ -536,6 +536,7 @@ static int pld_pcie_pm_resume_noirq(struct device *dev)
 #endif
 
 static struct pci_device_id pld_pcie_id_table[] = {
+{ 0x17cb, 0x1101, PCI_ANY_ID, PCI_ANY_ID }, /* Forced 0x1101 (QCA6390) support */
 #ifdef CONFIG_AR6320_SUPPORT
 	{ 0x168c, 0x003e, PCI_ANY_ID, PCI_ANY_ID },
 #elif defined(QCA_WIFI_QCA6290)
