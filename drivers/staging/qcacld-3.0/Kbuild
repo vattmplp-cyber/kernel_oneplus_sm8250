@@ -3425,13 +3425,10 @@ BUILD_TAG = "$(TIMESTAMP); cld:$(CLD_IDS); cmn:$(CMN_IDS);"
 CFLAGS_wlan_hdd_main.o += -DBUILD_TAG=\"$(BUILD_TAG)\"
 endif
 
-# Підключаємо лише необхідні допоміжні модулі HTC/HTT/CE без дублювання DP/TXRX
+# Підключаємо лише необхідні допоміжні модулі HTC/CE без застарілого htt.o
 OBJS += core/dp/txrx/ol_txrx_legacy_flow_control.o
 OBJS += core/dp/txrx/ol_cfg.o
 OBJS += ../qca-wifi-host-cmn/hif/src/ce/ce_service_legacy.o
-OBJS += ../qca-wifi-host-cmn/htc/htt/htt.o
-OBJS += ../qca-wifi-host-cmn/htc/htt/htt_t2h.o
-OBJS += ../qca-wifi-host-cmn/htc/htt/htt_h2t.o
 
 # Module information used by KBuild framework
 obj-$(CONFIG_QCA_CLD_WLAN) += $(MODNAME).o
