@@ -1390,7 +1390,9 @@ QDF_STATUS hdd_handle_injection_degradation(struct hdd_adapter *adapter,
 		}
 		qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
+		qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 		injection_ctx->security_ctx.stats.frames_dropped += frames_dropped;
+		qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 		hdd_inject_info("Dropped %u frames due to queue pressure", frames_dropped);
 		break;
 
@@ -1573,8 +1575,11 @@ QDF_STATUS hdd_get_injection_stats(struct hdd_adapter *adapter,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	/* Copy HDD layer statistics */
+	/* Copy HDD layer statistics under the statistics lock. */
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 	qdf_mem_copy(stats, &injection_ctx->security_ctx.stats, sizeof(*stats));
+	stats->last_inject_time = injection_ctx->security_ctx.last_injection_time;
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 
 	/* Get WMA layer statistics and merge them */
 	if (injection_ctx->wma_handle) {
@@ -1594,9 +1599,6 @@ QDF_STATUS hdd_get_injection_stats(struct hdd_adapter *adapter,
 			hdd_inject_warn("Failed to get WMA statistics: %d", status);
 		}
 	}
-
-	/* Update last injection time */
-	stats->last_inject_time = injection_ctx->security_ctx.last_injection_time;
 
 	hdd_inject_debug("Retrieved injection statistics for adapter %pK", adapter);
 	return QDF_STATUS_SUCCESS;
@@ -1685,7 +1687,8 @@ QDF_STATUS hdd_update_injection_stats(struct hdd_adapter *adapter,
 
 	stats = &injection_ctx->security_ctx.stats;
 
-	/* Update the specified statistic */
+	/* Update the specified statistic atomically. */
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 	switch (stat_type) {
 	case HDD_INJECTION_STAT_FRAMES_SUBMITTED:
 		stats->frames_submitted += increment;
@@ -1712,6 +1715,7 @@ QDF_STATUS hdd_update_injection_stats(struct hdd_adapter *adapter,
 		stats->firmware_errors += increment;
 		break;
 	default:
+		qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 		hdd_inject_err("Invalid statistic type: %u", stat_type);
 		return QDF_STATUS_E_INVAL;
 	}
@@ -1753,6 +1757,7 @@ QDF_STATUS hdd_update_injection_latency(struct hdd_adapter *adapter,
 	}
 
 	stats = &injection_ctx->security_ctx.stats;
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 
 	/* Update min latency */
 	if (stats->min_latency_us == 0 || latency_us < stats->min_latency_us) {
@@ -1772,6 +1777,7 @@ QDF_STATUS hdd_update_injection_latency(struct hdd_adapter *adapter,
 		stats->avg_latency_us = stats->total_latency_us / stats->frames_transmitted;
 	}
 
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -1788,7 +1794,9 @@ QDF_STATUS hdd_update_injection_throughput(struct hdd_adapter *adapter)
 {
 	struct hdd_injection_ctx *injection_ctx;
 	struct injection_stats *stats;
-	uint64_t current_time;
+	uint64_t current_time, elapsed_us = 0;
+	uint32_t throughput_fps = 0;
+	bool update_stats = false;
 	const uint64_t time_window_us = 1000000ULL;
 
 	if (!adapter) {
@@ -1806,9 +1814,8 @@ QDF_STATUS hdd_update_injection_throughput(struct hdd_adapter *adapter)
 	current_time = qdf_get_log_timestamp();
 
 	/*
-	 * Keep the measurement window on the adapter, not in function-static
-	 * globals. Serialize it with queue activity so concurrent TX paths
-	 * cannot race the counters.
+	 * Keep the measurement window per adapter, not in function-static
+	 * globals. The queue lock serializes concurrent producers.
 	 */
 	qdf_spin_lock_bh(&injection_ctx->queue_lock);
 	if (!injection_ctx->last_throughput_update) {
@@ -1819,22 +1826,26 @@ QDF_STATUS hdd_update_injection_throughput(struct hdd_adapter *adapter)
 	}
 
 	injection_ctx->frames_in_window++;
-	if (current_time >= injection_ctx->last_throughput_update &&
-	    current_time - injection_ctx->last_throughput_update >=
-										 time_window_us) {
-		uint64_t elapsed_us =
-			current_time - injection_ctx->last_throughput_update;
-		uint32_t throughput_fps =
-			(injection_ctx->frames_in_window * 1000000ULL) / elapsed_us;
+	if (current_time >= injection_ctx->last_throughput_update) {
+		elapsed_us = current_time - injection_ctx->last_throughput_update;
+		if (elapsed_us >= time_window_us) {
+			throughput_fps =
+				(injection_ctx->frames_in_window * 1000000ULL) /
+				elapsed_us;
+			injection_ctx->last_throughput_update = current_time;
+			injection_ctx->frames_in_window = 0;
+			update_stats = true;
+		}
+	}
+	qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
+	if (update_stats) {
+		qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 		stats->current_throughput_fps = throughput_fps;
 		if (throughput_fps > stats->peak_throughput_fps)
 			stats->peak_throughput_fps = throughput_fps;
-
-		injection_ctx->last_throughput_update = current_time;
-		injection_ctx->frames_in_window = 0;
+		qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 	}
-	qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -1873,24 +1884,20 @@ QDF_STATUS hdd_monitor_injection_resources(struct hdd_adapter *adapter)
 	queue_size = qdf_list_size(&injection_ctx->injection_queue);
 	qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
-	/* Update max queue depth */
-	if (queue_size > stats->max_queue_depth) {
-		stats->max_queue_depth = queue_size;
-	}
-
-	/* Update queue depth samples for average calculation */
-	stats->queue_depth_samples++;
-
-	/* Estimate memory usage */
+	/* Estimate memory usage. */
 	memory_usage = queue_size * (sizeof(struct inject_frame_req) + HDD_FRAME_INJECT_MAX_SIZE);
 	memory_usage += sizeof(struct hdd_injection_ctx);
 	memory_usage += sizeof(struct injection_stats);
 
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
+	if (queue_size > stats->max_queue_depth)
+		stats->max_queue_depth = queue_size;
+	stats->queue_depth_samples++;
 	stats->memory_usage_bytes = memory_usage;
 
-	/* CPU usage monitoring would require more complex implementation
-	 * For now, we'll set it to 0 as a placeholder */
+	/* CPU usage monitoring would require more complex implementation. */
 	stats->cpu_usage_percent = 0;
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 
 	return QDF_STATUS_SUCCESS;
 }
