@@ -120,7 +120,7 @@ static QDF_STATUS hdd_validate_frame_header(uint8_t *frame_data,
 	frame_control = (frame->i_fc[1] << 8) | frame->i_fc[0];
 
 	/* Validate frame version */
-	if ((frame->i_fc[0] & IEEE80211_FC0_VERSION_0) != IEEE80211_FC0_VERSION_0) {
+	if (frame->i_fc[0] & 0x03) {
 		hdd_validate_err("Invalid frame version: 0x%02x", 
 				 frame->i_fc[0] & 0x03);
 		return QDF_STATUS_E_INVAL;
