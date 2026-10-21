@@ -25,6 +25,12 @@
 #include <cds_utils.h>
 #include "wlan_hdd_rx_monitor.h"
 #include "ol_txrx.h"
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+#include "wlan_hdd_frame_inject.h"
+#endif
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+#include "wlan_hdd_frame_inject.h"
+#endif
 
 /**
  * hdd_rx_monitor_callback(): Callback function for receive monitor mode
@@ -122,6 +128,10 @@ int hdd_enable_monitor_mode(struct net_device *dev)
 {
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	uint8_t vdev_id;
+	int ret;
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
+#endif
 
 	if (!soc) {
 		hdd_err("SOC context is unavailable for monitor mode");
@@ -137,5 +147,37 @@ int hdd_enable_monitor_mode(struct net_device *dev)
 		return -EINVAL;
 	}
 
-	return cdp_set_monitor_mode(soc, vdev_id, false);
+	ret = cdp_set_monitor_mode(soc, vdev_id, false);
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	if (!ret && adapter && QDF_IS_STATUS_ERROR(hdd_frame_inject_enable(adapter)))
+		hdd_warn("Failed to enable frame injection; monitor RX remains active");
+#endif
+	return ret;
+}
+
+
+/**
+ * hdd_disable_monitor_mode() - Disable monitor mode TX/RX injection path.
+ * @dev: Monitor network device.
+ * Return: 0 on success, negative errno on failure.
+ */
+int hdd_disable_monitor_mode(struct net_device *dev)
+{
+	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
+	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
+	uint8_t vdev_id;
+
+	if (!soc || !adapter)
+		return -EINVAL;
+
+	hdd_enter_dev(dev);
+	vdev_id = cdp_get_mon_vdev_from_pdev(soc, OL_TXRX_PDEV_ID);
+	if (vdev_id == (uint8_t)-EINVAL)
+		return -EINVAL;
+
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	if (QDF_IS_STATUS_ERROR(hdd_frame_inject_disable(adapter)))
+		hdd_warn("Failed to disable frame injection");
+#endif
+	return cdp_set_monitor_mode(soc, vdev_id, true);
 }
