@@ -207,87 +207,6 @@ QDF_STATUS hdd_check_injection_capability(struct task_struct *task)
 }
 
 /**
- * hdd_create_injection_session() - Create new injection session
- * @security_ctx: Security context
- * @session_id: Session identifier
- *
- * This function creates a new injection session for tracking
- * and auditing purposes.
- *
- * Return: QDF_STATUS_SUCCESS on success, error code on failure
- */
-static QDF_STATUS hdd_create_injection_session(struct injection_security_ctx *security_ctx,
-					       uint32_t session_id)
-{
-	struct injection_session *session;
-	QDF_STATUS status;
-
-	hdd_security_debug("Creating injection session: %u", session_id);
-
-	session = qdf_mem_malloc(sizeof(*session));
-	if (!session) {
-		hdd_security_err("Failed to allocate session memory");
-		return QDF_STATUS_E_NOMEM;
-	}
-
-	/* Initialize session */
-	session->session_id = session_id;
-	session->pid = current->pid;
-	session->uid = from_kuid(&init_user_ns, current_uid());
-	session->start_time = hdd_get_current_time_ms();
-	session->frame_count = 0;
-
-	/* Add to active sessions list */
-	qdf_spin_lock_bh(&security_ctx->session_lock);
-	status = qdf_list_insert_back(&security_ctx->active_sessions, &session->node);
-	qdf_spin_unlock_bh(&security_ctx->session_lock);
-
-	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_security_err("Failed to add session to list: %d", status);
-		qdf_mem_free(session);
-		return status;
-	}
-
-	hdd_security_debug("Created injection session %u (PID: %d, UID: %u)",
-			  session_id, session->pid, session->uid);
-	return QDF_STATUS_SUCCESS;
-}
-
-/**
- * hdd_find_injection_session() - Find injection session by ID
- * @security_ctx: Security context
- * @session_id: Session identifier to find
- *
- * This function finds an active injection session by its ID.
- *
- * Return: Pointer to session if found, NULL otherwise
- */
-static struct injection_session *hdd_find_injection_session(
-	struct injection_security_ctx *security_ctx, uint32_t session_id)
-{
-	struct injection_session *session;
-	qdf_list_node_t *node;
-	QDF_STATUS status;
-
-	qdf_spin_lock_bh(&security_ctx->session_lock);
-	
-	status = qdf_list_peek_front(&security_ctx->active_sessions, &node);
-	while (QDF_IS_STATUS_SUCCESS(status)) {
-		session = qdf_container_of(node, struct injection_session, node);
-		
-		if (session->session_id == session_id) {
-			qdf_spin_unlock_bh(&security_ctx->session_lock);
-			return session;
-		}
-		
-		status = qdf_list_peek_next(&security_ctx->active_sessions, node, &node);
-	}
-	
-	qdf_spin_unlock_bh(&security_ctx->session_lock);
-	return NULL;
-}
-
-/**
  * hdd_apply_injection_rate_limit() - Apply rate limiting
  * @adapter: HDD adapter
  *
@@ -300,7 +219,8 @@ QDF_STATUS hdd_apply_injection_rate_limit(struct hdd_adapter *adapter)
 {
 	struct injection_security_ctx *security_ctx;
 	uint64_t current_time, time_diff;
-	uint32_t max_rate, window_ms;
+	uint32_t max_rate, window_ms, current_count;
+	bool rate_limited = false;
 
 	if (!adapter || !adapter->injection_ctx) {
 		hdd_security_err("Invalid adapter or injection context");
@@ -312,32 +232,41 @@ QDF_STATUS hdd_apply_injection_rate_limit(struct hdd_adapter *adapter)
 	max_rate = security_ctx->config.max_frame_rate;
 	window_ms = security_ctx->config.rate_window_ms;
 
-	hdd_security_debug("Applying rate limit: current_time=%llu, max_rate=%u, window=%u",
-			   current_time, max_rate, window_ms);
+	if (!max_rate || !window_ms)
+		return QDF_STATUS_E_INVAL;
 
-	/* Check if we need to reset the rate limiting window */
+	/*
+	 * qdf_get_log_timestamp() is in microseconds in this driver. Keep the
+	 * configured rate window in milliseconds but convert it before comparing.
+	 * The lock makes the window rollover and per-frame count atomic across
+	 * concurrent TX paths.
+	 */
+	qdf_spin_lock_bh(&security_ctx->session_lock);
 	time_diff = current_time - security_ctx->rate_limit_start_time;
-	if (time_diff >= window_ms) {
-		/* Reset rate limiting window */
+	if (time_diff >= (uint64_t)window_ms * 1000ULL) {
 		security_ctx->rate_limit_start_time = current_time;
 		security_ctx->current_rate_count = 0;
-		hdd_security_debug("Rate limiting window reset");
 	}
 
-	/* Check if rate limit is exceeded */
 	if (security_ctx->current_rate_count >= max_rate) {
 		security_ctx->stats.rate_limit_hits++;
+		current_count = security_ctx->current_rate_count;
+		rate_limited = true;
+	} else {
+		security_ctx->current_rate_count++;
+		security_ctx->last_injection_time = current_time;
+		current_count = security_ctx->current_rate_count;
+	}
+	qdf_spin_unlock_bh(&security_ctx->session_lock);
+
+	if (rate_limited) {
 		hdd_security_warn("Rate limit exceeded: %u >= %u (window: %u ms)",
-				  security_ctx->current_rate_count, max_rate, window_ms);
+				  current_count, max_rate, window_ms);
 		return QDF_STATUS_E_AGAIN;
 	}
 
-	/* Increment rate counter */
-	security_ctx->current_rate_count++;
-	security_ctx->last_injection_time = current_time;
-
 	hdd_security_debug("Rate limit check passed: count=%u/%u",
-			   security_ctx->current_rate_count, max_rate);
+			   current_count, max_rate);
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -353,7 +282,6 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 				struct inject_frame_req *req)
 {
 	struct injection_security_ctx *security_ctx;
-	struct injection_session *session;
 	uint64_t current_time;
 
 	if (!adapter || !adapter->injection_ctx || !req) {
@@ -363,21 +291,6 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 
 	security_ctx = &adapter->injection_ctx->security_ctx;
 	current_time = hdd_get_current_time_ms();
-
-	/* Find or create session */
-	session = hdd_find_injection_session(security_ctx, req->session_id);
-	if (!session) {
-		if (QDF_IS_STATUS_SUCCESS(hdd_create_injection_session(security_ctx, req->session_id))) {
-			session = hdd_find_injection_session(security_ctx, req->session_id);
-		}
-	}
-
-	/* Update session statistics */
-	if (session) {
-		qdf_spin_lock_bh(&security_ctx->session_lock);
-		session->frame_count++;
-		qdf_spin_unlock_bh(&security_ctx->session_lock);
-	}
 
 	/* Log injection activity based on configured log level */
 	if (security_ctx->config.log_level >= 4) {
@@ -389,9 +302,14 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 				   req->session_id, req->frame_len);
 	}
 
-	/* Update global statistics */
+	/*
+	 * A request ID is per-frame, not a long-lived session. Do not allocate
+	 * and retain a session object for every injected frame.
+	 */
+	qdf_spin_lock_bh(&security_ctx->session_lock);
 	security_ctx->stats.frames_submitted++;
 	security_ctx->stats.last_inject_time = current_time;
+	qdf_spin_unlock_bh(&security_ctx->session_lock);
 }
 
 /**
