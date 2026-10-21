@@ -1041,11 +1041,15 @@ static void hdd_monitor_mode_tx_inject(struct hdd_adapter *adapter,
 		mon_tx_path_logged = true;
 	}
 
-	req = qdf_mem_malloc(sizeof(*req));
+	/*
+	 * ndo_start_xmit runs in atomic context. These allocations must not
+	 * use the potentially sleepable QDF allocator.
+	 */
+	req = qdf_mem_malloc_atomic(sizeof(*req));
 	if (!req)
 		goto drop;
 
-	req->frame_data = qdf_mem_malloc(frame_len);
+	req->frame_data = qdf_mem_malloc_atomic(frame_len);
 	if (!req->frame_data) {
 		qdf_mem_free(req);
 		goto drop;
