@@ -282,7 +282,6 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 				struct inject_frame_req *req)
 {
 	struct injection_security_ctx *security_ctx;
-	uint64_t current_time;
 
 	if (!adapter || !adapter->injection_ctx || !req) {
 		hdd_security_err("Invalid parameters for activity logging");
@@ -290,7 +289,6 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 	}
 
 	security_ctx = &adapter->injection_ctx->security_ctx;
-	current_time = hdd_get_current_time_us();
 
 	/* Log injection activity based on configured log level */
 	if (security_ctx->config.log_level >= 4) {
@@ -303,13 +301,9 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 	}
 
 	/*
-	 * A request ID is per-frame, not a long-lived session. Do not allocate
-	 * and retain a session object for every injected frame. The submitted
-	 * counter is incremented once the request is actually queued by HDD.
+	 * Request IDs are per-frame rather than long-lived sessions; no persistent
+	 * session object is allocated from this hot TX path.
 	 */
-	qdf_spin_lock_bh(&security_ctx->session_lock);
-	security_ctx->stats.last_inject_time = current_time;
-	qdf_spin_unlock_bh(&security_ctx->session_lock);
 }
 
 /**
