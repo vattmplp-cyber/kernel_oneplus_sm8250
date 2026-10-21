@@ -355,8 +355,8 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 		status = hdd_check_injection_capability(NULL);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			qdf_spin_lock_bh(&security_ctx->session_lock);
-		security_ctx->stats.permission_denials++;
-		qdf_spin_unlock_bh(&security_ctx->session_lock);
+			security_ctx->stats.permission_denials++;
+			qdf_spin_unlock_bh(&security_ctx->session_lock);
 			hdd_security_warn("Capability check failed: %d", status);
 			return status;
 		}
