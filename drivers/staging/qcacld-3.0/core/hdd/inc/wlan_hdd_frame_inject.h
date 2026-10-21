@@ -362,6 +362,8 @@ struct hdd_injection_ctx {
 	qdf_spinlock_t queue_lock;
 	struct injection_security_ctx security_ctx;
 	bool is_monitor_mode;
+	uint64_t last_throughput_update;
+	uint64_t frames_in_window;
 	qdf_work_t queue_work;
 	struct hdd_adapter *adapter;
 	void *wma_handle;
