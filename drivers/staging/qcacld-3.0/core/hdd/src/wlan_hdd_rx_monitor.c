@@ -123,6 +123,11 @@ int hdd_enable_monitor_mode(struct net_device *dev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	uint8_t vdev_id;
 
+	if (!soc) {
+		hdd_err("SOC context is unavailable for monitor mode");
+		return -EINVAL;
+	}
+
 	hdd_enter_dev(dev);
 
 	vdev_id = cdp_get_mon_vdev_from_pdev(soc, OL_TXRX_PDEV_ID);
