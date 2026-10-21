@@ -1132,9 +1132,11 @@ QDF_STATUS hdd_recover_from_injection_error(struct hdd_adapter *adapter,
 		break;
 
 	case HDD_INJECTION_ERROR_RATE_LIMIT:
-		/* Reset rate limiting counters */
+		/* Reset rate limiting counters under the limiter lock. */
+		qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 		injection_ctx->security_ctx.current_rate_count = 0;
 		injection_ctx->security_ctx.rate_limit_start_time = current_time;
+		qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 		status = QDF_STATUS_SUCCESS;
 		break;
 
@@ -1222,9 +1224,11 @@ QDF_STATUS hdd_reset_injection_state(struct hdd_adapter *adapter)
 	recovery_ctx->recovery_in_progress = false;
 	recovery_ctx->consecutive_errors = 0;
 
-	/* Reset security context counters */
+	/* Reset security context counters under the limiter lock. */
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 	injection_ctx->security_ctx.current_rate_count = 0;
 	injection_ctx->security_ctx.rate_limit_start_time = qdf_get_log_timestamp();
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 
 	/* Clear injection queue if it has stale entries */
 	qdf_spin_lock_bh(&injection_ctx->queue_lock);
@@ -1389,9 +1393,11 @@ QDF_STATUS hdd_handle_injection_degradation(struct hdd_adapter *adapter,
 			config->max_frame_rate = 10; /* Minimum frame rate */
 		}
 
-		/* Clear current rate limiting window to apply new rate immediately */
+		/* Clear the rate window atomically so the reduced rate applies now. */
+		qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
 		injection_ctx->security_ctx.current_rate_count = 0;
 		injection_ctx->security_ctx.rate_limit_start_time = qdf_get_log_timestamp();
+		qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 		
 		hdd_inject_info("Reduced frame rate to %u fps due to memory pressure",
 				config->max_frame_rate);
@@ -1612,8 +1618,14 @@ QDF_STATUS hdd_reset_injection_stats(struct hdd_adapter *adapter)
 		return QDF_STATUS_E_INVAL;
 	}
 
-	/* Reset HDD layer statistics */
-	qdf_mem_zero(&injection_ctx->security_ctx.stats, sizeof(injection_ctx->security_ctx.stats));
+	/* Reset statistics and rate-limit state atomically. */
+	qdf_spin_lock_bh(&injection_ctx->security_ctx.session_lock);
+	qdf_mem_zero(&injection_ctx->security_ctx.stats,
+		     sizeof(injection_ctx->security_ctx.stats));
+	injection_ctx->security_ctx.last_injection_time = 0;
+	injection_ctx->security_ctx.rate_limit_start_time = 0;
+	injection_ctx->security_ctx.current_rate_count = 0;
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 	qdf_mem_zero(&injection_ctx->error_stats, sizeof(injection_ctx->error_stats));
 
 	/* Reset WMA layer statistics */
@@ -1624,10 +1636,11 @@ QDF_STATUS hdd_reset_injection_stats(struct hdd_adapter *adapter)
 		}
 	}
 
-	/* Reset timing information */
-	injection_ctx->security_ctx.last_injection_time = 0;
-	injection_ctx->security_ctx.rate_limit_start_time = 0;
-	injection_ctx->security_ctx.current_rate_count = 0;
+	/* Reset throughput measurement state independently from the rate limiter. */
+	qdf_spin_lock_bh(&injection_ctx->queue_lock);
+	injection_ctx->last_throughput_update = 0;
+	injection_ctx->frames_in_window = 0;
+	qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
 	hdd_inject_info("Reset injection statistics for adapter %pK", adapter);
 	return QDF_STATUS_SUCCESS;
