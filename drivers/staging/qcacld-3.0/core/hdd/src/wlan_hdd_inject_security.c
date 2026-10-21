@@ -64,11 +64,11 @@ struct injection_session {
 };
 
 /**
- * hdd_get_current_time_ms() - Get current time in milliseconds
+ * hdd_get_current_time_us() - Get current time in microseconds
  *
- * Return: Current time in milliseconds
+ * Return: Current time in microseconds
  */
-static uint64_t hdd_get_current_time_ms(void)
+static uint64_t hdd_get_current_time_us(void)
 {
 	return qdf_get_log_timestamp();
 }
@@ -98,7 +98,7 @@ QDF_STATUS hdd_init_injection_security_ctx(struct injection_security_ctx *securi
 	qdf_mem_zero(&security_ctx->stats, sizeof(security_ctx->stats));
 
 	/* Initialize rate limiting */
-	security_ctx->rate_limit_start_time = hdd_get_current_time_ms();
+	security_ctx->rate_limit_start_time = hdd_get_current_time_us();
 	security_ctx->current_rate_count = 0;
 	security_ctx->last_injection_time = 0;
 
@@ -228,7 +228,7 @@ QDF_STATUS hdd_apply_injection_rate_limit(struct hdd_adapter *adapter)
 	}
 
 	security_ctx = &adapter->injection_ctx->security_ctx;
-	current_time = hdd_get_current_time_ms();
+	current_time = hdd_get_current_time_us();
 	max_rate = security_ctx->config.max_frame_rate;
 	window_ms = security_ctx->config.rate_window_ms;
 
@@ -290,7 +290,7 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 	}
 
 	security_ctx = &adapter->injection_ctx->security_ctx;
-	current_time = hdd_get_current_time_ms();
+	current_time = hdd_get_current_time_us();
 
 	/* Log injection activity based on configured log level */
 	if (security_ctx->config.log_level >= 4) {
@@ -340,7 +340,9 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 
 	/* Check if injection is globally enabled */
 	if (!security_ctx->config.injection_enabled) {
+		qdf_spin_lock_bh(&security_ctx->session_lock);
 		security_ctx->stats.permission_denials++;
+		qdf_spin_unlock_bh(&security_ctx->session_lock);
 		hdd_security_warn("Frame injection is disabled");
 		return QDF_STATUS_E_PERM;
 	}
@@ -352,7 +354,9 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 	if (!in_interrupt() && !in_softirq()) {
 		status = hdd_check_injection_capability(NULL);
 		if (QDF_IS_STATUS_ERROR(status)) {
-			security_ctx->stats.permission_denials++;
+			qdf_spin_lock_bh(&security_ctx->session_lock);
+		security_ctx->stats.permission_denials++;
+		qdf_spin_unlock_bh(&security_ctx->session_lock);
 			hdd_security_warn("Capability check failed: %d", status);
 			return status;
 		}
@@ -361,7 +365,9 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 	/* Check monitor mode requirement */
 	if (security_ctx->config.require_monitor_mode && 
 	    !adapter->injection_ctx->is_monitor_mode) {
+		qdf_spin_lock_bh(&security_ctx->session_lock);
 		security_ctx->stats.permission_denials++;
+		qdf_spin_unlock_bh(&security_ctx->session_lock);
 		hdd_security_warn("Monitor mode required for injection");
 		return QDF_STATUS_E_PERM;
 	}
