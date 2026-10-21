@@ -1142,6 +1142,7 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
 	struct wma_injection_queue_node *node;
+	uint32_t queue_size, max_queue_size;
 	QDF_STATUS status;
 
 	if (!wma_handle || !req) {
@@ -1167,11 +1168,13 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 	qdf_spin_lock_bh(&ctx->queue_lock);
 
 	if (ctx->queue_size >= ctx->max_queue_size) {
-		qdf_spin_unlock_bh(&ctx->queue_lock);
+		queue_size = ctx->queue_size;
+		max_queue_size = ctx->max_queue_size;
 		ctx->stats.queue_overflows++;
 		ctx->stats.frames_dropped++;
+		qdf_spin_unlock_bh(&ctx->queue_lock);
 		wma_err("Injection queue overflow (size=%u, max=%u)",
-			ctx->queue_size, ctx->max_queue_size);
+			queue_size, max_queue_size);
 		return QDF_STATUS_E_RESOURCES;
 	}
 
