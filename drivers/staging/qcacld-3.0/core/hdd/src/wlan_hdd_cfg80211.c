@@ -19382,16 +19382,6 @@ static int wlan_hdd_cfg80211_connect_start(struct hdd_adapter *adapter,
 				&hdd_ctx->runtime_context.connect);
 		hdd_prevent_suspend_timeout(HDD_WAKELOCK_CONNECT_COMPLETE,
 					    WIFI_POWER_EVENT_WAKELOCK_CONNECT);
-		hdd_nofl_info("%s(vdevid-%d): issuing sme_roam_connect ssid:%.*s req_bssid:" QDF_MAC_ADDR_FMT " hint_bssid:" QDF_MAC_ADDR_FMT " oper_freq:%u hint_freq:%u auth_type:%d uc:%d mc:%d",
-			      adapter->dev->name, adapter->vdev_id,
-			      (int)roam_profile->SSIDs.SSIDList->SSID.length,
-			      roam_profile->SSIDs.SSIDList->SSID.ssId,
-			      QDF_MAC_ADDR_REF(sta_ctx->requested_bssid.bytes),
-			      QDF_MAC_ADDR_REF(roam_profile->bssid_hint.bytes),
-			      oper_freq, ch_freq_hint,
-			      sta_ctx->conn_info.auth_type,
-			      sta_ctx->conn_info.uc_encrypt_type,
-			      sta_ctx->conn_info.mc_encrypt_type);
 		qdf_status = sme_roam_connect(mac_handle,
 					      adapter->vdev_id, roam_profile,
 					      &roam_id);
@@ -20851,8 +20841,7 @@ static int __wlan_hdd_cfg80211_join_ibss(struct wiphy *wiphy,
 						 params->ssid_len,
 						 bssid.bytes, NULL,
 						 conn_info_channel,
-						 params->chandef.width,
-						 0);
+						 params->chandef.width);
 
 	if (0 > status) {
 		hdd_err("connect failed");
