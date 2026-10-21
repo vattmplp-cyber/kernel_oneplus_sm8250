@@ -1725,6 +1725,7 @@ QDF_STATUS hdd_update_injection_stats(struct hdd_adapter *adapter,
 	    stat_type == HDD_INJECTION_STAT_FRAMES_TRANSMITTED) {
 		injection_ctx->security_ctx.last_injection_time = qdf_get_log_timestamp();
 	}
+	qdf_spin_unlock_bh(&injection_ctx->security_ctx.session_lock);
 
 	return QDF_STATUS_SUCCESS;
 }
