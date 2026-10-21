@@ -16244,7 +16244,19 @@ static int hdd_restore_driver_mode(struct hdd_context *hdd_ctx,
 	int ret;
 
 	if (failed_mode_initialized) {
-		hdd_stop_present_mode(hdd_ctx, failed_mode);
+		/*
+		 * A monitor adapter may fail before its wakelock is acquired.
+		 * Avoid hdd_stop_present_mode() here because that helper releases
+		 * the monitor wakelock unconditionally.
+		 */
+		if (failed_mode == QDF_GLOBAL_MONITOR_MODE) {
+			hdd_abort_mac_scan_all_adapters(hdd_ctx);
+			wlan_cfg80211_cleanup_scan_queue(hdd_ctx->pdev, NULL);
+			hdd_stop_all_adapters(hdd_ctx);
+			hdd_deinit_all_adapters(hdd_ctx, false);
+		} else {
+			hdd_stop_present_mode(hdd_ctx, failed_mode);
+		}
 		hdd_cleanup_present_mode(hdd_ctx, failed_mode);
 	}
 
