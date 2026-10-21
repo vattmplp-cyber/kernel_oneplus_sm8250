@@ -31,18 +31,8 @@ jobs:
           echo "=== 1. Створення базової конфігурації ==="
           make O=out vendor/meteoric_defconfig
           
-          echo "=== 1.5. Примусове впорскування драйвера RTL8188EUS ==="
-          echo "CONFIG_WIRELESS=y" >> out/.config
-          echo "CONFIG_CFG80211=y" >> out/.config
-          echo "CONFIG_CFG80211_WEXT=y" >> out/.config
-          echo "CONFIG_RTL8188EUS=y" >> out/.config
-          echo "CONFIG_RTL8188EUS_MONITOR=y" >> out/.config
-          
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
-          
-          echo "=== ХИТРІСТЬ: Тестова збірка НАШОГО ДРАЙВЕРА в першу чергу ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/net/wireless/rtl8188eus/
           
           echo "=== Qualcomm qcacld compile check ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/staging/qcacld-3.0/
