@@ -294,11 +294,11 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 
 	/* Log injection activity based on configured log level */
 	if (security_ctx->config.log_level >= 4) {
-		hdd_security_info("Frame injection: session=%u, len=%u, flags=0x%x, PID=%d, UID=%u",
+		hdd_security_info("Frame injection request=%u, len=%u, flags=0x%x, PID=%d, UID=%u",
 				  req->session_id, req->frame_len, req->tx_flags,
 				  current->pid, from_kuid(&init_user_ns, current_uid()));
 	} else if (security_ctx->config.log_level >= 3) {
-		hdd_security_debug("Frame injection: session=%u, len=%u",
+		hdd_security_debug("Frame injection request=%u, len=%u",
 				   req->session_id, req->frame_len);
 	}
 
