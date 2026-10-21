@@ -385,13 +385,13 @@ QDF_STATUS hdd_process_frame_injection(struct hdd_adapter *adapter,
 	QDF_STATUS status;
 	uint8_t frame_type;
 
-	hdd_inject_debug("Processing frame injection: session_id=%u, len=%u",
-			 req->session_id, req->frame_len);
-
-	if (!adapter || !adapter->injection_ctx || !req) {
-		hdd_inject_err("Invalid parameters");
+	if (!adapter || !adapter->injection_ctx || !req || !req->frame_data) {
+		hdd_inject_err("Invalid adapter, injection context, request, or frame data");
 		return QDF_STATUS_E_INVAL;
 	}
+
+	hdd_inject_debug("Processing frame injection: session_id=%u, len=%u",
+			 req->session_id, req->frame_len);
 
 	/* Check global enable flag */
 	if (!hdd_injection_is_globally_enabled()) {
@@ -747,11 +747,11 @@ void hdd_process_injection_queue_work(void *arg)
 				total_latency = req->complete_time - req->submit_time;
 				hdd_update_injection_latency(injection_ctx->adapter, total_latency);
 				
-				hdd_inject_debug("Frame queued to WMA successfully: session_id=%u, latency=%llu us",
+				hdd_inject_debug("Frame accepted by TX backend: session_id=%u, latency=%llu us",
 						 req->session_id, total_latency);
 			} else {
 				hdd_update_injection_stats(injection_ctx->adapter, HDD_INJECTION_STAT_FRAMES_DROPPED, 1);
-				hdd_inject_err("Failed to queue frame to WMA: %d", wma_status);
+				hdd_inject_err("TX backend rejected injected frame: %d", wma_status);
 			}
 			}
 		} else {
