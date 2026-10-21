@@ -5656,8 +5656,10 @@ uint8_t ol_txrx_get_mon_vdev_from_pdev(struct cdp_soc_t *soc_hdl,
 	struct ol_txrx_soc_t *soc = (struct ol_txrx_soc_t *)soc_hdl;
 	ol_txrx_pdev_handle pdev = ol_txrx_get_pdev_from_pdev_id(soc, pdev_id);
 
-	if (qdf_unlikely(!pdev))
+	if (qdf_unlikely(!pdev || !pdev->monitor_vdev)) {
+		ol_txrx_err("Monitor vdev is unavailable");
 		return -EINVAL;
+	}
 
 	return pdev->monitor_vdev->vdev_id;
 }
