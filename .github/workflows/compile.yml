@@ -10,7 +10,7 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: 13.1-new2
+          ref: work/monitor-mode-stability-injection
 
       - name: Setup Build Environment
         run: |
@@ -22,6 +22,9 @@ jobs:
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           
+          set -euo pipefail
+          echo "=== Source revision ==="
+          git rev-parse HEAD
           echo "=== 1. Створення базової конфігурації ==="
           make O=out vendor/meteoric_defconfig
           
@@ -38,6 +41,9 @@ jobs:
           echo "=== ХИТРІСТЬ: Тестова збірка НАШОГО ДРАЙВЕРА в першу чергу ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/net/wireless/rtl8188eus/
           
+          echo "=== Qualcomm qcacld compile check ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/staging/qcacld-3.0/
+
           echo "=== 3. Повна збірка всього іншого ядра ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
