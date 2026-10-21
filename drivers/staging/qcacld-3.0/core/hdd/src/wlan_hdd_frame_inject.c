@@ -744,14 +744,24 @@ void hdd_process_injection_queue_work(void *arg)
 			req->complete_time = qdf_get_log_timestamp();
 
 			if (QDF_IS_STATUS_SUCCESS(wma_status)) {
-				hdd_update_injection_stats(injection_ctx->adapter, HDD_INJECTION_STAT_FRAMES_TRANSMITTED, 1);
-				
-				/* Calculate and update latency statistics */
-				total_latency = req->complete_time - req->submit_time;
-				hdd_update_injection_latency(injection_ctx->adapter, total_latency);
-				
-				hdd_inject_debug("Frame accepted by TX backend: session_id=%u, latency=%llu us",
-						 req->session_id, total_latency);
+				/*
+				 * DP raw-TX acceptance is the only completion signal available
+				 * here for data/control frames. Management frames are counted
+				 * from WMA firmware completion stats, not when merely queued.
+				 */
+				if ((req->frame_data[0] & 0x0c) != 0x00) {
+					hdd_update_injection_stats(injection_ctx->adapter,
+								  HDD_INJECTION_STAT_FRAMES_TRANSMITTED,
+								  1);
+					total_latency = req->complete_time - req->submit_time;
+					hdd_update_injection_latency(injection_ctx->adapter,
+								    total_latency);
+					hdd_inject_debug("Raw frame accepted by TX backend: request=%u, latency=%llu us",
+							 req->session_id, total_latency);
+				} else {
+					hdd_inject_debug("Management frame queued to WMA: request=%u",
+							 req->session_id);
+				}
 			} else {
 				hdd_update_injection_stats(injection_ctx->adapter, HDD_INJECTION_STAT_FRAMES_DROPPED, 1);
 				hdd_inject_err("TX backend rejected injected frame: %d", wma_status);
@@ -1571,7 +1581,6 @@ QDF_STATUS hdd_get_injection_stats(struct hdd_adapter *adapter,
 		status = wma_get_injection_queue_stats(injection_ctx->wma_handle, &wma_stats);
 		if (QDF_IS_STATUS_SUCCESS(status)) {
 			/* Merge WMA statistics with HDD statistics */
-			stats->frames_submitted += wma_stats.frames_queued;
 			stats->frames_transmitted += wma_stats.frames_processed;
 			stats->frames_dropped += wma_stats.frames_dropped;
 			stats->queue_overflows += wma_stats.queue_overflows;
