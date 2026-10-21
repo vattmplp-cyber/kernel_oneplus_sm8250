@@ -654,9 +654,11 @@ QDF_STATUS hdd_sanitize_frame_content(uint8_t *frame_data, uint32_t frame_len)
 	frame_type = frame->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 	frame_subtype = frame->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
 
-	/* Clear reserved bits in frame control */
-	frame->i_fc[0] &= ~0x03; /* Clear version bits (should be 00) */
-	frame->i_fc[1] &= ~0x40; /* Clear reserved bit */
+	/*
+	 * The header validator has already rejected nonzero protocol-version
+	 * bits. Preserve all valid Frame Control flags here, especially the
+	 * Protected bit (bit 6 of i_fc[1]); it is not a reserved bit.
+	 */
 
 	/* Sanitize based on frame type */
 	switch (frame_type) {
