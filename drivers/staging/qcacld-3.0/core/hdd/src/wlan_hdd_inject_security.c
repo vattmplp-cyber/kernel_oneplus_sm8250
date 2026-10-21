@@ -304,10 +304,10 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 
 	/*
 	 * A request ID is per-frame, not a long-lived session. Do not allocate
-	 * and retain a session object for every injected frame.
+	 * and retain a session object for every injected frame. The submitted
+	 * counter is incremented once the request is actually queued by HDD.
 	 */
 	qdf_spin_lock_bh(&security_ctx->session_lock);
-	security_ctx->stats.frames_submitted++;
 	security_ctx->stats.last_inject_time = current_time;
 	qdf_spin_unlock_bh(&security_ctx->session_lock);
 }
