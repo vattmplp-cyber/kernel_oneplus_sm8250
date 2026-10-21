@@ -4660,7 +4660,6 @@ QDF_STATUS wma_mon_mlme_vdev_stop_send(struct vdev_mlme_obj *vdev_mlme,
 	uint8_t vdev_id;
 	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 	QDF_STATUS status;
-	struct del_bss_resp *resp;
 
 	if (!wma) {
 		WMA_LOGE("%s wma handle is NULL", __func__);
@@ -4688,6 +4687,7 @@ QDF_STATUS wma_mon_mlme_vdev_down_send(struct vdev_mlme_obj *vdev_mlme,
 	uint8_t vdev_id;
 	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 	QDF_STATUS status;
+	struct del_bss_resp *resp;
 
 	if (!wma) {
 		WMA_LOGE("%s wma handle is NULL", __func__);
