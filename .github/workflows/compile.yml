@@ -6,6 +6,10 @@ on:
     branches:
       - work/monitor-mode-stability-injection
 
+concurrency:
+  group: monitor-mode-kernel-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
