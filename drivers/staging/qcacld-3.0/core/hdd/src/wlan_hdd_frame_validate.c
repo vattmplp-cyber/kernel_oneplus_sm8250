@@ -663,12 +663,11 @@ QDF_STATUS hdd_sanitize_frame_content(uint8_t *frame_data, uint32_t frame_len)
 	/* Sanitize based on frame type */
 	switch (frame_type) {
 	case IEEE80211_FC0_TYPE_MGT:
-		/* For management frames, ensure certain fields are reasonable */
-		if (frame_subtype == HDD_MGMT_SUBTYPE_BEACON ||
-		    frame_subtype == HDD_MGMT_SUBTYPE_PROBE_RESP) {
-			/* Don't allow injection of beacons with our own BSSID */
-			/* This would be checked against adapter's BSSID in actual implementation */
-		}
+		/*
+		 * Preserve valid management contents as supplied by the caller.
+		 * This helper has no adapter/BSSID context, so it must not claim
+		 * to enforce an own-BSSID policy here.
+		 */
 		break;
 	case IEEE80211_FC0_TYPE_CTL:
 		/* Control frames have minimal sanitization needs */
