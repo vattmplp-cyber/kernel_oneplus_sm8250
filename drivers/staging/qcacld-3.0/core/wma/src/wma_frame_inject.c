@@ -1203,9 +1203,22 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 		return QDF_STATUS_E_NOMEM;
 	}
 
-	/* Add to queue */
+	/*
+	 * Re-check under the insertion lock. Multiple producers can pass the
+	 * earlier fast-path overflow check while allocating their queue nodes.
+	 */
 	qdf_spin_lock_bh(&ctx->queue_lock);
+	if (ctx->queue_size >= ctx->max_queue_size) {
+		ctx->stats.queue_overflows++;
+		ctx->stats.frames_dropped++;
+		qdf_spin_unlock_bh(&ctx->queue_lock);
+		wma_injection_queue_node_free(node);
+		wma_err("Injection queue filled during allocation (max=%u)",
+			ctx->max_queue_size);
+		return QDF_STATUS_E_RESOURCES;
+	}
 
+	/* Add to queue while the capacity check is still protected. */
 	status = qdf_list_insert_back(&ctx->queue, &node->node);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		qdf_spin_unlock_bh(&ctx->queue_lock);
