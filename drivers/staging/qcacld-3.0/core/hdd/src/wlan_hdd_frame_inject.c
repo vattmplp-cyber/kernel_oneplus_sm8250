@@ -105,6 +105,9 @@ QDF_STATUS hdd_init_frame_injection(struct hdd_adapter *adapter)
 		return QDF_STATUS_E_NOMEM;
 	}
 
+	/* Initialize per-adapter counters before creating locks and lists. */
+	qdf_mem_zero(injection_ctx, sizeof(*injection_ctx));
+
 	/* Initialize injection queue */
 	qdf_list_create(&injection_ctx->injection_queue,
 			HDD_FRAME_INJECT_MAX_QUEUE_SIZE);
@@ -1764,9 +1767,7 @@ QDF_STATUS hdd_update_injection_throughput(struct hdd_adapter *adapter)
 	struct hdd_injection_ctx *injection_ctx;
 	struct injection_stats *stats;
 	uint64_t current_time;
-	uint64_t time_window_ms = 1000; /* 1 second window */
-	static uint64_t last_throughput_update = 0;
-	static uint64_t frames_in_window = 0;
+	const uint64_t time_window_us = 1000000ULL;
 
 	if (!adapter) {
 		hdd_inject_err("Invalid adapter parameter");
@@ -1782,31 +1783,36 @@ QDF_STATUS hdd_update_injection_throughput(struct hdd_adapter *adapter)
 	stats = &injection_ctx->security_ctx.stats;
 	current_time = qdf_get_log_timestamp();
 
-	/* Initialize on first call */
-	if (last_throughput_update == 0) {
-		last_throughput_update = current_time;
-		frames_in_window = 1;
+	/*
+	 * Keep the measurement window on the adapter, not in function-static
+	 * globals. Serialize it with queue activity so concurrent TX paths
+	 * cannot race the counters.
+	 */
+	qdf_spin_lock_bh(&injection_ctx->queue_lock);
+	if (!injection_ctx->last_throughput_update) {
+		injection_ctx->last_throughput_update = current_time;
+		injection_ctx->frames_in_window = 1;
+		qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 		return QDF_STATUS_SUCCESS;
 	}
 
-	frames_in_window++;
+	injection_ctx->frames_in_window++;
+	if (current_time >= injection_ctx->last_throughput_update &&
+	    current_time - injection_ctx->last_throughput_update >=
+										 time_window_us) {
+		uint64_t elapsed_us =
+			current_time - injection_ctx->last_throughput_update;
+		uint32_t throughput_fps =
+			(injection_ctx->frames_in_window * 1000000ULL) / elapsed_us;
 
-	/* Calculate throughput every second */
-	if (current_time - last_throughput_update >= time_window_ms * 1000) {
-		uint32_t throughput_fps = (frames_in_window * 1000000) / 
-					  (current_time - last_throughput_update);
-		
 		stats->current_throughput_fps = throughput_fps;
-		
-		/* Update peak throughput */
-		if (throughput_fps > stats->peak_throughput_fps) {
+		if (throughput_fps > stats->peak_throughput_fps)
 			stats->peak_throughput_fps = throughput_fps;
-		}
 
-		/* Reset for next window */
-		last_throughput_update = current_time;
-		frames_in_window = 0;
+		injection_ctx->last_throughput_update = current_time;
+		injection_ctx->frames_in_window = 0;
 	}
+	qdf_spin_unlock_bh(&injection_ctx->queue_lock);
 
 	return QDF_STATUS_SUCCESS;
 }
