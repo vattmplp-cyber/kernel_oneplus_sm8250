@@ -16229,6 +16229,89 @@ static int hdd_mode_change_psoc_idle_restart(struct device *dev)
 	return ret;
 }
 
+/*
+ * Recover the previous operating mode when a mode transition fails after
+ * the old adapters have already been closed. Keep the module parameter and
+ * the QDF connection mode in sync, and attempt to bring the previous mode
+ * back instead of leaving the WLAN driver half-switched.
+ */
+static int hdd_restore_driver_mode(struct hdd_context *hdd_ctx,
+				   enum QDF_GLOBAL_MODE failed_mode,
+				   enum QDF_GLOBAL_MODE curr_mode,
+				   bool failed_mode_initialized)
+{
+	struct hdd_adapter *adapter;
+	int ret;
+
+	if (failed_mode_initialized) {
+		hdd_stop_present_mode(hdd_ctx, failed_mode);
+		hdd_cleanup_present_mode(hdd_ctx, failed_mode);
+	}
+
+	if (DRIVER_MODULES_CLOSED != hdd_ctx->driver_status) {
+		is_mode_change_psoc_idle_shutdown = true;
+		ret = pld_idle_shutdown(hdd_ctx->parent_dev,
+					hdd_mode_change_psoc_idle_shutdown);
+		if (ret) {
+			is_mode_change_psoc_idle_shutdown = false;
+			hdd_err("Mode recovery: failed to stop WLAN modules: %d",
+				ret);
+			goto failed;
+		}
+	}
+
+	hdd_set_conparam(curr_mode);
+
+	ret = pld_idle_restart(hdd_ctx->parent_dev,
+			       hdd_mode_change_psoc_idle_restart);
+	if (ret) {
+		hdd_err("Mode recovery: failed to restart WLAN modules: %d",
+			ret);
+		goto failed;
+	}
+
+	ret = hdd_open_adapters_for_mode(hdd_ctx, curr_mode);
+	if (ret) {
+		hdd_err("Mode recovery: failed to reopen mode %d adapters: %d",
+			curr_mode, ret);
+		goto failed;
+	}
+
+	if (curr_mode == QDF_GLOBAL_MONITOR_MODE) {
+		adapter = hdd_get_adapter(hdd_ctx, QDF_MONITOR_MODE);
+		if (!adapter) {
+			hdd_err("Mode recovery: monitor adapter is missing");
+			ret = -EINVAL;
+			goto failed;
+		}
+
+		ret = hdd_start_adapter(adapter);
+		if (ret) {
+			hdd_err("Mode recovery: failed to start monitor adapter: %d",
+				ret);
+			goto failed;
+		}
+
+		qdf_wake_lock_acquire(&hdd_ctx->monitor_mode_wakelock,
+				      WIFI_POWER_EVENT_WAKELOCK_MONITOR_MODE);
+	}
+
+	con_mode = curr_mode;
+	hdd_info("Mode recovery: restored previous driver mode %d",
+		 curr_mode);
+
+	return 0;
+
+failed:
+	/* Never leave the public parameter claiming the failed target mode. */
+	hdd_set_conparam(curr_mode);
+	con_mode = curr_mode;
+	hdd_err("Mode recovery incomplete (wanted %d, previous %d, error %d)",
+		failed_mode, curr_mode, ret);
+
+	return ret;
+}
+
 /**
  * __hdd_driver_mode_change() - Handles a driver mode change
  * @hdd_ctx: Pointer to the global HDD context
@@ -16287,12 +16370,15 @@ static int __hdd_driver_mode_change(struct hdd_context *hdd_ctx,
 				 hdd_mode_change_psoc_idle_restart);
 	if (errno) {
 		hdd_err("Start wlan modules failed: %d", errno);
+		hdd_restore_driver_mode(hdd_ctx, next_mode, curr_mode, false);
 		return errno;
 	}
 
 	errno = hdd_open_adapters_for_mode(hdd_ctx, next_mode);
 	if (errno) {
-		hdd_err("Failed to open adapters");
+		hdd_err("Failed to open adapters for mode %d: %d",
+			next_mode, errno);
+		hdd_restore_driver_mode(hdd_ctx, next_mode, curr_mode, true);
 		return errno;
 	}
 
@@ -16302,13 +16388,16 @@ static int __hdd_driver_mode_change(struct hdd_context *hdd_ctx,
 
 		QDF_BUG(adapter);
 		if (!adapter) {
+			errno = -EINVAL;
 			hdd_err("Failed to get monitor adapter");
-			return -EINVAL;
+			hdd_restore_driver_mode(hdd_ctx, next_mode, curr_mode, true);
+			return errno;
 		}
 
 		errno = hdd_start_adapter(adapter);
 		if (errno) {
-			hdd_err("Failed to start monitor adapter");
+			hdd_err("Failed to start monitor adapter: %d", errno);
+			hdd_restore_driver_mode(hdd_ctx, next_mode, curr_mode, true);
 			return errno;
 		}
 
