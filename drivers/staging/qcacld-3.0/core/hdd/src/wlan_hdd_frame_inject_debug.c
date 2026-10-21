@@ -49,7 +49,7 @@ static uint32_t g_injection_max_frame_rate = HDD_FRAME_INJECT_DEFAULT_RATE_LIMIT
 static uint32_t g_injection_max_frame_size = HDD_FRAME_INJECT_MAX_SIZE;
 static uint32_t g_injection_max_queue_size = HDD_FRAME_INJECT_MAX_QUEUE_SIZE;
 static uint32_t g_injection_rate_window_ms = HDD_FRAME_INJECT_RATE_WINDOW_MS;
-static bool g_injection_require_monitor_mode = false;
+static bool g_injection_require_monitor_mode = true;
 
 /* Debugfs root directory */
 static struct dentry *g_injection_debugfs_root = NULL;
