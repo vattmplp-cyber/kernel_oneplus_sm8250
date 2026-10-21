@@ -4235,6 +4235,9 @@ static int __hdd_stop(struct net_device *dev)
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 	int ret;
 	mac_handle_t mac_handle;
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	void *wma_handle;
+#endif
 
 	hdd_enter_dev(dev);
 
@@ -4271,6 +4274,25 @@ static int __hdd_stop(struct net_device *dev)
 	if (false == test_bit(DEVICE_IFACE_OPENED, &adapter->event_flags)) {
 		hdd_err("NETDEV Interface is not OPENED");
 		return -ENODEV;
+	}
+
+	/*
+	 * Stop monitor RX and tear down the injection TX helper before the
+	 * monitor adapter is deinitialized. This also covers packet-capture
+	 * monitor vdevs while the global con_mode remains in mission mode.
+	 */
+	if (wlan_hdd_is_session_type_monitor(adapter->device_mode) ||
+	    dev->type == ARPHRD_IEEE80211_RADIOTAP) {
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+		ret = hdd_disable_monitor_mode(dev);
+		if (ret)
+			hdd_warn("Failed to disable monitor datapath before ifdown: %d",
+				 ret);
+
+		wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
+		if (wma_handle)
+			wma_injection_pre_stop_cleanup(wma_handle);
+#endif
 	}
 
 	/* Make sure the interface is marked as closed */
