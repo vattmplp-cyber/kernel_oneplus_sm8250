@@ -1720,34 +1720,38 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
-	if (monitor_vdev && !wmi_mgmt_service) {
-    QDF_STATUS fallback_status;
-    uint16_t frame_len = qdf_nbuf_len(wmi_buf);
+		if (monitor_vdev && !wmi_mgmt_service) {
+		QDF_STATUS fallback_status;
+		uint16_t frame_len = qdf_nbuf_len(wmi_buf);
 
-    wma_info("Fallback Active: wmi_service_mgmt_tx_wmi absent. Routing frame via wma_tx_packet Data Path Passthrough.");
+		wma_info("Fallback Active: Routing frame via wma_tx_packet Data Path.");
 
-    fallback_status = wma_tx_packet(
-        wma_handle,
-        wmi_buf,
-        frame_len,
-        TXRX_FRM_802_11_MGMT,
-        TXRX_DIR_TX,
-        0,
-        0,
-        vdev_id,
-        false,
-        tx_chanfreq,
-        0
-    );
+		fallback_status = wma_tx_packet(
+			wma_handle,             // 1. wma_context
+			wmi_buf,                // 2. tx_frame
+			frame_len,              // 3. frmLen
+			TXRX_FRM_802_11_MGMT,   // 4. frmType
+			TXRX_DIR_TX,            // 5. txDir
+			0,                      // 6. tid
+			NULL,                   // 7. tx_frm_download_comp_cb (пропускаємо)
+			NULL,                   // 8. pData (немає додаткових даних)
+			NULL,                   // 9. tx_frm_ota_comp_cb (пропускаємо)
+			0,                      // 10. tx_flag
+			vdev_id,                // 11. vdev_id
+			false,                  // 12. tdls_flag
+			tx_chanfreq,            // 13. channel_freq
+			0                       // 14. rateid rid
+		);
 
-    if (fallback_status != QDF_STATUS_SUCCESS) {
-        wma_err("Data path fallback injection failed, status = %d", fallback_status);
-        qdf_nbuf_free(wmi_buf);
-        return fallback_status;
-    }
+		if (fallback_status != QDF_STATUS_SUCCESS) {
+			wma_err("Data path fallback failed, status = %d", fallback_status);
+			qdf_nbuf_free(wmi_buf);
+			return fallback_status;
+		}
 
-    return QDF_STATUS_SUCCESS;
-}
+		return QDF_STATUS_SUCCESS;
+	}
+
 
 
 	if (monitor_vdev) {
