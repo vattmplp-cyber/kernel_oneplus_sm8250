@@ -28,6 +28,8 @@
 #include "wma_frame_inject.h"
 #include "wlan_hdd_frame_inject.h"
 #include "wma_api.h"
+#include <wlan_reg_services_api.h>
+#include <reg_services_public_struct.h>
 #include "wma_internal.h"
 #include "wmi_unified_api.h"
 #include "wmi_unified.h"
@@ -207,6 +209,7 @@ struct wma_injection_tx_vdev {
 };
 
 static struct wma_injection_tx_vdev g_inj_tx_vdev;
+static int8_t g_inj_tx_power_limit_dbm = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
 
 static void wma_injection_destroy_tx_vdev(tp_wma_handle wma);
 
@@ -273,6 +276,9 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	bool found = false;
 	int i;
 	QDF_STATUS status;
+	struct wlan_objmgr_pdev *pdev;
+	uint8_t reg_power;
+	int8_t tx_power_cap;
 
 	if (g_inj_tx_vdev.created) {
 		if (g_inj_tx_vdev.chanfreq == chanfreq)
@@ -309,6 +315,31 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 
 	/* New vdev being created — reset session state for a clean start */
 	wma_injection_reset_session_state();
+
+	pdev = wlan_vdev_get_pdev(wma->interfaces[mon_vdev_id].vdev);
+	if (!pdev) {
+		wma_err("Injection: monitor vdev has no pdev");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	reg_power = wlan_reg_get_channel_reg_power_for_freq(pdev, chanfreq);
+	if (reg_power == REG_INVALID_TXPOWER) {
+		wma_err("Injection: no regulatory TX-power limit for %u MHz",
+			chanfreq);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	/*
+	 * Never raise the existing conservative 20 dBm injection cap.
+	 * The regulatory limit may be lower on the selected channel.
+	 */
+	tx_power_cap = QDF_MIN((int8_t)reg_power,
+			       g_inj_tx_power_limit_dbm);
+	if (tx_power_cap <= 0) {
+		wma_err("Injection: invalid effective TX-power cap %d dBm",
+			tx_power_cap);
+		return QDF_STATUS_E_INVAL;
+	}
 
 	mon_mac = wlan_vdev_mlme_get_macaddr(
 			wma->interfaces[mon_vdev_id].vdev);
@@ -355,8 +386,8 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	vstart.channel.cfreq2     = 0;
 	/* 2.4 GHz → MODE_11G(1), 5 GHz → MODE_11A(0) */
 	vstart.channel.phy_mode   = (chanfreq < 4000) ? 1 : 0;
-	vstart.channel.maxregpower = 20;
-	vstart.channel.maxpower    = 20;
+	vstart.channel.maxregpower = reg_power;
+	vstart.channel.maxpower    = tx_power_cap;
 	vstart.beacon_interval    = 0;
 	vstart.dtim_period        = 0;
 
@@ -366,6 +397,19 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		goto err_stop;
 	}
 	msleep(150);
+
+	/*
+	 * Apply the limit explicitly to the hidden TX vdev as well as the
+	 * VDEV_START channel parameters. This is the vdev that actually sends
+	 * monitor-injected frames.
+	 */
+	status = wma_vdev_set_param(wma->wmi_handle, vid,
+				    WMI_VDEV_PARAM_TX_PWRLIMIT,
+				    tx_power_cap);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		wma_err("Injection TX vdev TX-power limit failed: %d", status);
+		goto err_stop;
+	}
 
 	/* ---------- 3. PEER CREATE (self-peer → fw vdev+0xc) ---------- */
 	qdf_mem_zero(&pcreate, sizeof(pcreate));
@@ -400,6 +444,74 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 err_stop:
 	wmi_unified_vdev_delete_send(wma->wmi_handle, vid);
 	return status;
+}
+
+/**
+ * wma_injection_set_tx_power_limit() - configure monitor injection TX cap
+ * @monitor_vdev_id: monitor interface vdev id
+ * @power_dbm: requested cap in dBm; zero means automatic/default
+ *
+ * The cap is never allowed above the driver's conservative 20 dBm ceiling,
+ * and is further clamped to the regulatory power for the active channel.
+ */
+QDF_STATUS wma_injection_set_tx_power_limit(uint8_t monitor_vdev_id,
+					    int8_t power_dbm)
+{
+	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
+	struct wlan_objmgr_pdev *pdev;
+	uint8_t reg_power;
+	int8_t effective_power;
+	QDF_STATUS status;
+
+	if (!wma || monitor_vdev_id >= wma->max_bssid ||
+	    !wma->interfaces[monitor_vdev_id].vdev)
+		return QDF_STATUS_E_INVAL;
+
+	if (power_dbm <= 0)
+		power_dbm = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
+	power_dbm = QDF_MIN(power_dbm,
+			    HDD_FRAME_INJECT_TX_POWER_CAP_DBM);
+
+	if (g_inj_tx_vdev.created &&
+	    g_inj_tx_vdev.monitor_vdev_id == monitor_vdev_id) {
+		pdev = wlan_vdev_get_pdev(wma->interfaces[monitor_vdev_id].vdev);
+		if (!pdev)
+			return QDF_STATUS_E_FAILURE;
+
+		reg_power = wlan_reg_get_channel_reg_power_for_freq(
+			pdev, g_inj_tx_vdev.chanfreq);
+		if (reg_power == REG_INVALID_TXPOWER)
+			return QDF_STATUS_E_INVAL;
+
+		effective_power = QDF_MIN((int8_t)reg_power, power_dbm);
+		if (effective_power <= 0)
+			return QDF_STATUS_E_INVAL;
+
+		status = wma_vdev_set_param(wma->wmi_handle,
+					    g_inj_tx_vdev.vdev_id,
+					    WMI_VDEV_PARAM_TX_PWRLIMIT,
+					    effective_power);
+		if (QDF_IS_STATUS_ERROR(status))
+			return status;
+	}
+
+	g_inj_tx_power_limit_dbm = power_dbm;
+	wma_info("Monitor injection TX-power cap set to %d dBm",
+		 power_dbm);
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS wma_injection_get_tx_power_limit(uint8_t monitor_vdev_id,
+					    int8_t *power_dbm)
+{
+	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
+
+	if (!wma || !power_dbm || monitor_vdev_id >= wma->max_bssid ||
+	    !wma->interfaces[monitor_vdev_id].vdev)
+		return QDF_STATUS_E_INVAL;
+
+	*power_dbm = g_inj_tx_power_limit_dbm;
+	return QDF_STATUS_SUCCESS;
 }
 
 /**
