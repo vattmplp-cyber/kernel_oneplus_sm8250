@@ -325,6 +325,26 @@ QDF_STATUS wma_sync_firmware_injection_state(tp_wma_handle wma_handle,
  */
 enum wma_injection_fw_error_type wma_translate_fw_injection_error(uint32_t fw_error_code);
 
+/**
+ * wma_injection_set_tx_power_limit() - set safe maximum TX power for monitor injection
+ * @monitor_vdev_id: monitor interface vdev id
+ * @power_dbm: requested maximum power in dBm; capped by regulatory policy
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wma_injection_set_tx_power_limit(uint8_t monitor_vdev_id,
+					    int8_t power_dbm);
+
+/**
+ * wma_injection_get_tx_power_limit() - get configured injection TX power cap
+ * @monitor_vdev_id: monitor interface vdev id
+ * @power_dbm: output requested cap in dBm
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wma_injection_get_tx_power_limit(uint8_t monitor_vdev_id,
+					    int8_t *power_dbm);
+
 #else /* FEATURE_FRAME_INJECTION_SUPPORT */
 
 static inline QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
