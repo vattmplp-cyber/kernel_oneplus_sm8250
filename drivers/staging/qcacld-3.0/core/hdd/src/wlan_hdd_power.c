@@ -61,6 +61,7 @@
 #include <wlan_hdd_lpass.h>
 
 #include <wma_types.h>
+#include "wma.h"
 #include <ol_txrx_osif_api.h>
 #include <ol_defines.h>
 #include "hif.h"
@@ -2583,6 +2584,41 @@ static int __wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 			return 0;
 		}
 		break;
+	case QDF_MONITOR_MODE: {
+		uint32_t freq = adapter->mon_chan_freq;
+
+		/*
+		 * Monitor vdevs have no associated BSS peer, so the connection
+		 * statistics path cannot provide a TX-power value. Read the
+		 * radio's current band-specific TX-power limit instead.
+		 */
+		if (!freq) {
+			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
+			if (sta_ctx)
+				freq = sta_ctx->ch_info.freq;
+		}
+
+		if (!freq) {
+			hdd_debug_rl("Monitor channel is unknown; cannot read TX power");
+			return -EINVAL;
+		}
+
+		if (freq < 3000)
+			*dbm = wma_cli_get_command(adapter->vdev_id,
+					   WMI_PDEV_PARAM_TXPOWER_LIMIT2G,
+					   PDEV_CMD);
+		else
+			*dbm = wma_cli_get_command(adapter->vdev_id,
+					   WMI_PDEV_PARAM_TXPOWER_LIMIT5G,
+					   PDEV_CMD);
+
+		if (*dbm < 0) {
+			hdd_err("Failed to read monitor TX-power limit: %d", *dbm);
+			return *dbm;
+		}
+
+		return 0;
+	}
 	default:
 		hdd_debug_rl("Current interface is not supported for get tx_power");
 		return 0;
