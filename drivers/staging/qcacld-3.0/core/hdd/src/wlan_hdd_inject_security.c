@@ -320,8 +320,11 @@ void hdd_log_injection_activity(struct hdd_adapter *adapter,
 QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 					      struct inject_frame_req *req)
 {
+	struct hdd_injection_ctx *injection_ctx;
 	struct injection_security_ctx *security_ctx;
+	struct net_device *dev;
 	QDF_STATUS status;
+	bool monitor_mode_active;
 
 	hdd_security_debug("Validating injection permissions");
 
@@ -330,7 +333,25 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	security_ctx = &adapter->injection_ctx->security_ctx;
+	injection_ctx = adapter->injection_ctx;
+	security_ctx = &injection_ctx->security_ctx;
+
+	/*
+	 * Do not rely solely on is_monitor_mode: it is initialized to false and
+	 * can remain stale when monitor mode is entered outside the normal HDD
+	 * mode-switch callback (for example, by the driver's con_mode path).
+	 * The queue worker already recognises these live interface indicators;
+	 * apply the same test here, before the monitor-mode permission gate.
+	 */
+	dev = adapter->dev;
+	monitor_mode_active = injection_ctx->is_monitor_mode ||
+		adapter->device_mode == QDF_MONITOR_MODE ||
+		(dev && dev->ieee80211_ptr &&
+		 dev->ieee80211_ptr->iftype == NL80211_IFTYPE_MONITOR);
+	if (monitor_mode_active && !injection_ctx->is_monitor_mode) {
+		injection_ctx->is_monitor_mode = true;
+		hdd_security_debug("Monitor mode confirmed from live interface state");
+	}
 
 	/* Check if injection is globally enabled */
 	if (!security_ctx->config.injection_enabled) {
@@ -356,9 +377,8 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 		}
 	}
 
-	/* Check monitor mode requirement */
-	if (security_ctx->config.require_monitor_mode && 
-	    !adapter->injection_ctx->is_monitor_mode) {
+	/* Check monitor mode requirement against synchronised live state */
+	if (security_ctx->config.require_monitor_mode && !monitor_mode_active) {
 		qdf_spin_lock_bh(&security_ctx->session_lock);
 		security_ctx->stats.permission_denials++;
 		qdf_spin_unlock_bh(&security_ctx->session_lock);
