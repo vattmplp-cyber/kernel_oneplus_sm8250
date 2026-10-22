@@ -1597,18 +1597,33 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * probe requests before WMI submission.
 	 */
 	if (monitor_vdev && is_probe_req && is_bcast_da && req->frame_len >= 24) {
-		uint8_t *vdev_mac =
+		uint8_t *monitor_mac =
 			wlan_vdev_mlme_get_macaddr(wma_handle->interfaces[vdev_id].vdev);
+		uint8_t tx_mac[QDF_MAC_ADDR_SIZE];
 
-		if (vdev_mac &&
-		    qdf_mem_cmp(frame_data + 10, vdev_mac, QDF_MAC_ADDR_SIZE) != 0) {
-			if (!inject_probe_sa_fix_logged) {
-				wma_warn("Injection probe-req SA override %pM -> %pM on vdev %u",
-					 frame_data + 10, vdev_mac, vdev_id);
-				inject_probe_sa_fix_logged = true;
+		/*
+		 * Monitor TX is submitted on g_inj_tx_vdev, not the monitor
+		 * vdev. The helper MAC is the monitor MAC with the locally
+		 * administered bit set (same rule as wma_injection_ensure_tx_vdev).
+		 * Rewriting SA to the monitor MAC here leaves it mismatched with
+		 * the actual TX vdev, so firmware may discard the probe request.
+		 */
+		if (monitor_mac) {
+			qdf_mem_copy(tx_mac, monitor_mac, QDF_MAC_ADDR_SIZE);
+			tx_mac[0] |= 0x02;
+
+			if (qdf_mem_cmp(frame_data + 10, tx_mac,
+					QDF_MAC_ADDR_SIZE) != 0) {
+				if (!inject_probe_sa_fix_logged) {
+					wma_warn("Injection probe-req SA override %pM -> helper TX MAC %pM (monitor vdev %u)",
+						 frame_data + 10, tx_mac, vdev_id);
+					inject_probe_sa_fix_logged = true;
+				}
+				qdf_mem_copy(frame_data + 10, tx_mac,
+					     QDF_MAC_ADDR_SIZE);
+				qdf_mem_copy(req->frame_data + 10, tx_mac,
+					     QDF_MAC_ADDR_SIZE);
 			}
-			qdf_mem_copy(frame_data + 10, vdev_mac, QDF_MAC_ADDR_SIZE);
-			qdf_mem_copy(req->frame_data + 10, vdev_mac, QDF_MAC_ADDR_SIZE);
 		}
 	}
 
