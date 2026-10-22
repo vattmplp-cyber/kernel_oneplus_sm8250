@@ -1743,11 +1743,12 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			0                       // 14. rateid rid
 		);
 
-		if (fallback_status != QDF_STATUS_SUCCESS) {
+				if (fallback_status != QDF_STATUS_SUCCESS) {
 			wma_err("Data path fallback failed, status = %d", fallback_status);
-			qdf_nbuf_free(wmi_buf);
+			// ПРИБРАЛИ qdf_nbuf_free(wmi_buf), щоб не було double-free!
 			return fallback_status;
 		}
+
 
 		return QDF_STATUS_SUCCESS;
 	}
