@@ -940,9 +940,14 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 
 		/* Send frame to firmware */
 		status = wma_send_injection_frame_to_fw(wma_handle, &node->req, node->vdev_id);
-		if (QDF_IS_STATUS_SUCCESS(status)) {
-			ctx->stats.frames_processed++;
-		} else {
+		/*
+		 * A successful return here means only that the command was
+		 * accepted by the host/WMI submission path. Count frames_processed
+		 * in wma_handle_injection_fw_response() after firmware completion,
+		 * not here; otherwise stats double-count frames and the completion
+		 * logger can suppress its own first-success diagnostics.
+		 */
+		if (QDF_IS_STATUS_ERROR(status)) {
 			ctx->stats.frames_dropped++;
 			wma_err("Failed to send injection frame to firmware: %d", status);
 		}
