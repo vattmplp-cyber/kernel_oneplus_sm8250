@@ -281,9 +281,26 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	int8_t tx_power_cap;
 
 	if (g_inj_tx_vdev.created) {
-		if (g_inj_tx_vdev.chanfreq == chanfreq)
-			return QDF_STATUS_SUCCESS;
-		/* Channel changed – tear down and recreate */
+		/*
+		 * Reuse the helper only if it still belongs to this monitor
+		 * interface and its derived TX MAC matches the current monitor
+		 * MAC. The monitor vdev can be recreated or its MAC can change
+		 * without a channel change; reusing the old helper in that case
+		 * makes the transmitted source address disagree with the helper
+		 * vdev MAC and can cause firmware to discard frames.
+		 */
+		mon_mac = wlan_vdev_mlme_get_macaddr(
+				wma->interfaces[mon_vdev_id].vdev);
+		if (g_inj_tx_vdev.chanfreq == chanfreq &&
+		    g_inj_tx_vdev.monitor_vdev_id == mon_vdev_id &&
+		    mon_mac) {
+			qdf_mem_copy(inj_mac, mon_mac, QDF_MAC_ADDR_SIZE);
+			inj_mac[0] |= 0x02;
+			if (qdf_mem_cmp(inj_mac, g_inj_tx_vdev.mac_addr,
+					QDF_MAC_ADDR_SIZE) == 0)
+				return QDF_STATUS_SUCCESS;
+		}
+		/* Channel, monitor vdev, or derived MAC changed — recreate. */
 		wma_injection_destroy_tx_vdev(wma);
 	}
 
