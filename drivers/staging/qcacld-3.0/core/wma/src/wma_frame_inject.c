@@ -1697,9 +1697,21 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
-	if (monitor_vdev && !wmi_mgmt_service && !inject_wmi_service_absent_logged) {
-		wma_warn("Injection monitor vdev: mgmt_tx_wmi service bit is 0, but WMI TX will still be attempted");
-		inject_wmi_service_absent_logged = true;
+	if (monitor_vdev && !wmi_mgmt_service) {
+		if (!inject_wmi_service_absent_logged) {
+			wma_err("Injection monitor vdev: firmware does not advertise mgmt_tx_wmi; refusing unsupported WMI TX");
+			inject_wmi_service_absent_logged = true;
+		}
+		/*
+		 * wma_main registers the WMI management-TX completion handler
+		 * only when this service bit is enabled. Sending anyway can
+		 * look successful at submission time without a valid completion
+		 * path, so fail explicitly rather than report a false success.
+		 * The legacy path is deliberately not used for monitor vdevs:
+		 * this firmware may assert on that path.
+		 */
+		qdf_nbuf_free(wmi_buf);
+		return QDF_STATUS_E_NOSUPPORT;
 	}
 
 	if (monitor_vdev) {
