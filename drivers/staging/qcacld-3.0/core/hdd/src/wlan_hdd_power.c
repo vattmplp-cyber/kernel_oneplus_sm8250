@@ -62,6 +62,10 @@
 
 #include <wma_types.h>
 #include "wma.h"
+#include "wma_frame_inject.h"
+#include <wlan_reg_services_api.h>
+#include <reg_services_public_struct.h>
+#include <wlan_hdd_frame_inject.h>
 #include <ol_txrx_osif_api.h>
 #include <ol_defines.h>
 #include "hif.h"
@@ -2333,6 +2337,43 @@ static int __wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
 	if (wlan_hdd_validate_vdev_id(adapter->vdev_id))
 		return -EINVAL;
 
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	/*
+	 * Monitor injection transmits on a hidden helper vdev, not the monitor
+	 * vdev itself. Route its limit there rather than using the regular
+	 * BSSID-based SME setter (which cannot resolve a monitor BSSID).
+	 */
+	if (adapter->device_mode == QDF_MONITOR_MODE ||
+	    wdev->iftype == NL80211_IFTYPE_MONITOR) {
+		if (type == NL80211_TX_POWER_AUTOMATIC) {
+			dbm = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
+		} else if (type == NL80211_TX_POWER_LIMITED ||
+			   type == NL80211_TX_POWER_FIXED) {
+			dbm = MBM_TO_DBM(mbm);
+			if (!dbm)
+				dbm = mbm;
+			if (dbm <= 0) {
+				hdd_err("Invalid monitor TX-power cap %d dBm", dbm);
+				return -EINVAL;
+			}
+		} else {
+			hdd_err("Invalid monitor TX-power setting type %d", type);
+			return -EINVAL;
+		}
+
+		/* Never allow this injection path above its existing 20 dBm cap. */
+		dbm = QDF_MIN(dbm, HDD_FRAME_INJECT_TX_POWER_CAP_DBM);
+		status = wma_injection_set_tx_power_limit(adapter->vdev_id, dbm);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			hdd_err("Setting monitor injection TX-power cap failed: %d",
+				status);
+			return qdf_status_to_os_return(status);
+		}
+		hdd_debug("Set monitor injection TX-power cap to %d dBm", dbm);
+		return 0;
+	}
+#endif
+
 	if (adapter->device_mode == QDF_SAP_MODE ||
 	    adapter->device_mode == QDF_P2P_GO_MODE) {
 		qdf_copy_macaddr(&bssid, &adapter->mac_addr);
@@ -2586,37 +2627,45 @@ static int __wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 		break;
 	case QDF_MONITOR_MODE: {
 		uint32_t freq = adapter->mon_chan_freq;
+		struct wlan_objmgr_pdev *pdev;
+		uint8_t reg_power;
+		int8_t configured_power = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
 
-		/*
-		 * Monitor vdevs have no associated BSS peer, so the connection
-		 * statistics path cannot provide a TX-power value. Read the
-		 * radio's current band-specific TX-power limit instead.
-		 */
 		if (!freq) {
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 			if (sta_ctx)
 				freq = sta_ctx->ch_info.freq;
 		}
-
 		if (!freq) {
 			hdd_debug_rl("Monitor channel is unknown; cannot read TX power");
 			return -EINVAL;
 		}
 
-		if (freq < 3000)
-			*dbm = wma_cli_get_command(adapter->vdev_id,
-					   WMI_PDEV_PARAM_TXPOWER_LIMIT2G,
-					   PDEV_CMD);
-		else
-			*dbm = wma_cli_get_command(adapter->vdev_id,
-					   WMI_PDEV_PARAM_TXPOWER_LIMIT5G,
-					   PDEV_CMD);
+		pdev = wlan_vdev_get_pdev(adapter->vdev);
+		if (!pdev)
+			return -EINVAL;
 
-		if (*dbm < 0) {
-			hdd_err("Failed to read monitor TX-power limit: %d", *dbm);
-			return *dbm;
+		reg_power = wlan_reg_get_channel_reg_power_for_freq(pdev, freq);
+		if (reg_power == REG_INVALID_TXPOWER) {
+			hdd_err("No regulatory TX-power value for monitor frequency %u",
+				freq);
+			return -EINVAL;
 		}
 
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+		status = qdf_status_to_os_return(
+			wma_injection_get_tx_power_limit(adapter->vdev_id,
+						 &configured_power));
+		if (status)
+			return status;
+#endif
+
+		/*
+		 * This reports the maximum configured for injected frames, not a
+		 * per-frame measurement. Firmware can transmit below this cap based
+		 * on rate, regulatory policy and radio/SAR limits.
+		 */
+		*dbm = QDF_MIN((int)reg_power, (int)configured_power);
 		return 0;
 	}
 	default:
