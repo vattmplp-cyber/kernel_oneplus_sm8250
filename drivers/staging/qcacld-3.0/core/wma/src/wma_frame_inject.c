@@ -1721,21 +1721,34 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
 	if (monitor_vdev && !wmi_mgmt_service) {
-		if (!inject_wmi_service_absent_logged) {
-			wma_err("Injection monitor vdev: firmware does not advertise mgmt_tx_wmi; refusing unsupported WMI TX");
-			inject_wmi_service_absent_logged = true;
-		}
-		/*
-		 * wma_main registers the WMI management-TX completion handler
-		 * only when this service bit is enabled. Sending anyway can
-		 * look successful at submission time without a valid completion
-		 * path, so fail explicitly rather than report a false success.
-		 * The legacy path is deliberately not used for monitor vdevs:
-		 * this firmware may assert on that path.
-		 */
-		qdf_nbuf_free(wmi_buf);
-		return QDF_STATUS_E_NOSUPPORT;
-	}
+    QDF_STATUS fallback_status;
+    uint16_t frame_len = qdf_nbuf_len(wmi_buf);
+
+    wma_info("Fallback Active: wmi_service_mgmt_tx_wmi absent. Routing frame via wma_tx_packet Data Path Passthrough.");
+
+    fallback_status = wma_tx_packet(
+        wma_handle,
+        wmi_buf,
+        frame_len,
+        TXRX_FRM_802_11_MGMT,
+        TXRX_DIR_TX,
+        0,
+        0,
+        vdev_id,
+        false,
+        tx_chanfreq,
+        0
+    );
+
+    if (fallback_status != QDF_STATUS_SUCCESS) {
+        wma_err("Data path fallback injection failed, status = %d", fallback_status);
+        qdf_nbuf_free(wmi_buf);
+        return fallback_status;
+    }
+
+    return QDF_STATUS_SUCCESS;
+}
+
 
 	if (monitor_vdev) {
 		/*
