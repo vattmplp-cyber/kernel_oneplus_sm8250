@@ -28,6 +28,8 @@
 #include <linux/cred.h>
 #include <linux/interrupt.h>
 #include <linux/time.h>
+#include <linux/netdevice.h>
+#include <net/cfg80211.h>
 #include <qdf_mem.h>
 #include <qdf_trace.h>
 #include <qdf_time.h>
