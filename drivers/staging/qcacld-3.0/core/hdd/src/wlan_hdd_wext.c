@@ -11064,8 +11064,59 @@ static int hdd_wext_giwfreq(struct net_device *dev,
  * driver's we_handler_def (num_standard=0) prevents cfg80211's wext compat
  * layer from ever being reached, causing "channel -1".
  */
+/**
+ * hdd_wext_giwtxpow() - SIOCGIWTXPOW handler
+ * @dev: net_device
+ * @info: request info
+ * @wrqu: output TX-power parameters
+ * @extra: unused
+ *
+ * Keep TX-power reporting available when the driver installs its own WEXT
+ * handler table, which otherwise bypasses cfg80211's compatibility handler.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+static int hdd_wext_giwtxpow(struct net_device *dev,
+			     struct iw_request_info *info,
+			     union iwreq_data *wrqu, char *extra)
+{
+	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
+	struct wireless_dev *wdev;
+	int tx_power;
+	int ret;
+
+	if (!adapter || !wrqu)
+		return -EINVAL;
+
+	wdev = dev->ieee80211_ptr;
+	if (!wdev || !wdev->wiphy)
+		return -EINVAL;
+
+	if ((wrqu->txpower.flags & IW_TXPOW_TYPE) != IW_TXPOW_DBM)
+		return -EINVAL;
+	if (wrqu->txpower.flags & IW_TXPOW_RANGE)
+		return -EINVAL;
+
+	ret = wlan_hdd_cfg80211_get_txpower(wdev->wiphy, wdev, &tx_power);
+	if (ret)
+		return ret;
+
+	wrqu->txpower.fixed = 1;
+	wrqu->txpower.disabled = 0;
+	wrqu->txpower.value = tx_power;
+	wrqu->txpower.flags = IW_TXPOW_DBM;
+
+	return 0;
+}
+
+/*
+ * Explicit WEXT getters for monitor mode. Installing this table overrides
+ * cfg80211's generic compatibility handlers, so expose both the channel
+ * frequency and the TX-power query needed by wireless tools.
+ */
 static const iw_handler we_standard[] = {
 	[IW_IOCTL_IDX(SIOCGIWFREQ)] = (iw_handler)hdd_wext_giwfreq,
+	[IW_IOCTL_IDX(SIOCGIWTXPOW)] = (iw_handler)hdd_wext_giwtxpow,
 };
 
 const struct iw_handler_def we_handler_def = {
