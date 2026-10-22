@@ -1731,7 +1731,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			wmi_buf,                // 2. tx_frame
 			frame_len,              // 3. frmLen
 			TXRX_FRM_802_11_MGMT,   // 4. frmType
-			TXRX_DIR_TX,            // 5. txDir
+			ANI_TXDIR_IBSS,         // 5. txDir (management frame has no DS direction)
 			0,                      // 6. tid
 			NULL,                   // 7. tx_frm_download_comp_cb (пропускаємо)
 			NULL,                   // 8. pData (немає додаткових даних)
