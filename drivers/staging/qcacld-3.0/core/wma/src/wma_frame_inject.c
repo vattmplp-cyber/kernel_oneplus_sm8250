@@ -154,7 +154,7 @@ static bool inject_wmi_path_logged;
 static bool inject_legacy_path_logged;
 static bool inject_monitor_no_legacy_logged;
 static bool inject_wmi_service_absent_logged;
-static bool inject_probe_sa_fix_logged;
+static bool inject_mgmt_sa_fix_logged;
 static bool inject_patch_banner_logged;
 
 /*
@@ -231,7 +231,7 @@ static void wma_injection_reset_session_state(void)
 	inject_legacy_path_logged = false;
 	inject_monitor_no_legacy_logged = false;
 	inject_wmi_service_absent_logged = false;
-	inject_probe_sa_fix_logged = false;
+	inject_mgmt_sa_fix_logged = false;
 	inject_patch_banner_logged = false;
 
 	/* Reset rate-limited log counters so new session gets fresh logs */
@@ -1614,41 +1614,42 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	qdf_mem_copy(frame_data, req->frame_data, req->frame_len);
 
 	/*
-	 * Monitor probe-request injection can be discarded by firmware when SA
-	 * does not match the transmitting vdev MAC. Normalize SA for broadcast
-	 * probe requests before WMI submission.
+	 * Monitor management TX uses g_inj_tx_vdev, whose source MAC is the
+	 * monitor interface MAC with the locally-administered bit set. Firmware
+	 * may discard management frames whose SA disagrees with that TX vdev.
+	 * Translate the monitor interface's own SA for every management frame.
+	 * Preserve an explicitly supplied alternate SA, except broadcast probe
+	 * requests, for which this firmware requires the helper's SA.
 	 */
-	if (monitor_vdev && is_probe_req && is_bcast_da && req->frame_len >= 24) {
+	if (monitor_vdev && fc_type == 0x00 && req->frame_len >= 24) {
 		uint8_t *monitor_mac =
 			wlan_vdev_mlme_get_macaddr(wma_handle->interfaces[vdev_id].vdev);
 		uint8_t tx_mac[QDF_MAC_ADDR_SIZE];
+		bool uses_monitor_sa;
 
-		/*
-		 * Monitor TX is submitted on g_inj_tx_vdev, not the monitor
-		 * vdev. The helper MAC is the monitor MAC with the locally
-		 * administered bit set (same rule as wma_injection_ensure_tx_vdev).
-		 * Rewriting SA to the monitor MAC here leaves it mismatched with
-		 * the actual TX vdev, so firmware may discard the probe request.
-		 */
 		if (monitor_mac) {
 			qdf_mem_copy(tx_mac, monitor_mac, QDF_MAC_ADDR_SIZE);
 			tx_mac[0] |= 0x02;
+			uses_monitor_sa =
+				qdf_mem_cmp(frame_data + 10, monitor_mac,
+					    QDF_MAC_ADDR_SIZE) == 0;
 
-			if (qdf_mem_cmp(frame_data + 10, tx_mac,
-					QDF_MAC_ADDR_SIZE) != 0) {
-				if (!inject_probe_sa_fix_logged) {
-					wma_warn("Injection probe-req SA override %pM -> helper TX MAC %pM (monitor vdev %u)",
-						 frame_data + 10, tx_mac, vdev_id);
-					inject_probe_sa_fix_logged = true;
+			if (uses_monitor_sa || (is_probe_req && is_bcast_da)) {
+				if (qdf_mem_cmp(frame_data + 10, tx_mac,
+						QDF_MAC_ADDR_SIZE) != 0) {
+					if (!inject_mgmt_sa_fix_logged) {
+						wma_warn("Injection management SA override %pM -> helper TX MAC %pM (monitor vdev %u)",
+							 frame_data + 10, tx_mac, vdev_id);
+						inject_mgmt_sa_fix_logged = true;
+					}
+					qdf_mem_copy(frame_data + 10, tx_mac,
+						     QDF_MAC_ADDR_SIZE);
+					qdf_mem_copy(req->frame_data + 10, tx_mac,
+						     QDF_MAC_ADDR_SIZE);
 				}
-				qdf_mem_copy(frame_data + 10, tx_mac,
-					     QDF_MAC_ADDR_SIZE);
-				qdf_mem_copy(req->frame_data + 10, tx_mac,
-					     QDF_MAC_ADDR_SIZE);
 			}
 		}
 	}
-
 	/* Initialize WMI management parameters for injection */
 	qdf_mem_zero(&mgmt_params, sizeof(mgmt_params));
 	mgmt_params.tx_frame = wmi_buf;
