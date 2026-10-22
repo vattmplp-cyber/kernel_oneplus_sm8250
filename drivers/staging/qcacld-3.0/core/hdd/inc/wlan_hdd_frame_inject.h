@@ -51,6 +51,9 @@ struct wireless_dev;
 /* Maximum frame size for injection (including 802.11 header) */
 #define HDD_FRAME_INJECT_MAX_SIZE        2304
 
+/* Conservative per-frame-injection TX power cap, in dBm. */
+#define HDD_FRAME_INJECT_TX_POWER_CAP_DBM 20
+
 /* Maximum number of frames in injection queue per adapter */
 #define HDD_FRAME_INJECT_MAX_QUEUE_SIZE  64
 
