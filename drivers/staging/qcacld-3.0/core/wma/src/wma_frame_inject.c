@@ -1864,11 +1864,13 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	}
 
 	if (!wmi_tx_ok) {
-		if (monitor_vdev) {
-			wma_warn("Injection monitor vdev: dropping frame after WMI TX failure to avoid legacy FW assert");
-			qdf_nbuf_free(wmi_buf);
-			return status;
-		}
+		/*
+		 * Use the legacy CDP Data Path if WMI management TX fails,
+		 * including for monitor injection. Keep wmi_buf alive for
+		 * cdp_mgmt_send_ext(); do not free it on this fallback path.
+		 */
+		if (monitor_vdev)
+			wma_warn("Injection monitor vdev: WMI failed, attempting CDP Data Path fallback");
 
 		/* Fallback to legacy data path if WMI TX is unavailable or failed. */
 		if (!inject_legacy_path_logged) {
@@ -1899,6 +1901,9 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 					   req->frame_data,
 					   QDF_MIN(32, req->frame_len));
 		}
+
+		if (monitor_vdev)
+			wma_info("Injection: WMI failed, falling back to cdp_mgmt_send_ext (Data Path)");
 
 		ret = cdp_mgmt_send_ext(soc, mgmt_params.vdev_id, wmi_buf,
 					mgmt_params.tx_type,
