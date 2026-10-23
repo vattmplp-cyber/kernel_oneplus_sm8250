@@ -173,6 +173,8 @@ struct wma_injection_debug_info {
 	uint8_t addr2[QDF_MAC_ADDR_SIZE];
 	uint8_t addr3[QDF_MAC_ADDR_SIZE];
 	qdf_nbuf_t tx_buf; /* nbuf passed to WMI; must be unmapped+freed on completion */
+	bool submit_pending; /* WMI submit call has not returned yet */
+	bool completion_pending; /* completion raced with the submit return */
 	uint64_t submit_ts; /* log-timestamp when submitted to FW */
 };
 
@@ -629,20 +631,22 @@ void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 	qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
 }
 
-static void
+static bool
 wma_injection_debug_cache_update(uint32_t desc_id,
 				 struct inject_frame_req *req,
 				 uint8_t fc_type,
 				 uint8_t fc_subtype,
-				 uint16_t chanfreq)
+				 uint16_t chanfreq,
+				 qdf_nbuf_t tx_buf)
 {
 	struct wma_injection_debug_info *entry;
 	qdf_nbuf_t stale_buf = NULL;
 	uint32_t stale_desc_id = 0;
+	uint32_t busy_desc_id = 0;
 	uint32_t slot;
 
-	if (!desc_id || !req || !req->frame_data)
-		return;
+	if (!desc_id || !req || !req->frame_data || !tx_buf)
+		return false;
 
 	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
 
@@ -650,8 +654,22 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry = &g_wma_injection_debug_cache[slot];
 
 	/*
-	 * If this slot was previously used for a different desc_id whose
-	 * completion never arrived, detach its buffer while holding the lock.
+	 * Never evict an entry while its WMI submit call is still in progress:
+	 * the frame may already have reached firmware, and the sender still
+	 * needs this slot to reconcile an early completion.
+	 */
+	if (entry->valid && entry->desc_id != desc_id &&
+	    entry->submit_pending) {
+		busy_desc_id = entry->desc_id;
+		qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+		wma_warn("Injection cache slot %u busy with pending desc_id=%u",
+			 slot, busy_desc_id);
+		return false;
+	}
+
+	/*
+	 * If this slot was used for a different descriptor whose completion
+	 * never arrived, detach its buffer while holding the lock.
 	 */
 	if (entry->valid && entry->tx_buf && entry->desc_id != desc_id) {
 		stale_desc_id = entry->desc_id;
@@ -666,7 +684,9 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry->chanfreq = chanfreq;
 	entry->fc_type = fc_type;
 	entry->fc_subtype = fc_subtype;
-	entry->tx_buf = NULL;
+	entry->tx_buf = tx_buf;
+	entry->submit_pending = true;
+	entry->completion_pending = false;
 	entry->submit_ts = qdf_get_log_timestamp();
 	qdf_mem_zero(entry->addr1, sizeof(entry->addr1));
 	qdf_mem_zero(entry->addr2, sizeof(entry->addr2));
@@ -679,6 +699,7 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	}
 
 	entry->valid = true;
+	qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
 	if (stale_buf) {
@@ -687,12 +708,14 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 		wma_injection_unmap_tx_buf(stale_buf);
 		qdf_nbuf_free(stale_buf);
 	}
+
+	return true;
 }
 
 /*
- * Claim a completion entry atomically.  The caller owns snapshot->tx_buf
- * after success; the cache is invalidated before the lock is released so
- * the reaper cannot free the same buffer.
+ * Claim a completion entry atomically. If the submit call is still running,
+ * leave buffer ownership with the sender and remember that completion raced
+ * ahead of the submit return.
  */
 static bool
 wma_injection_debug_cache_get(uint32_t desc_id,
@@ -710,16 +733,83 @@ wma_injection_debug_cache_get(uint32_t desc_id,
 	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 	entry = &g_wma_injection_debug_cache[slot];
 	if (entry->valid && entry->desc_id == desc_id) {
-		*snapshot = *entry;
-		entry->tx_buf = NULL;
-		entry->valid = false;
-		if (snapshot->tx_buf)
-			qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
-		found = true;
+		if (entry->submit_pending) {
+			entry->completion_pending = true;
+		} else {
+			*snapshot = *entry;
+			entry->tx_buf = NULL;
+			entry->valid = false;
+			entry->completion_pending = false;
+			if (snapshot->tx_buf)
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+			found = true;
+		}
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
 	return found;
+}
+
+/*
+ * Reconcile cache ownership after wmi_mgmt_unified_cmd_send() returns.
+ *
+ * If completion arrives while the WMI submit call is on-stack, the callback
+ * sets completion_pending but does not release the buffer. This function can
+ * then safely decide whether to retain the buffer for a later completion,
+ * release an already-completed buffer, or detach it for CDP fallback after
+ * a synchronous WMI failure.
+ *
+ * Return true when a completion was observed before submit finalization, so
+ * the caller must not resubmit the same nbuf through the CDP fallback.
+ */
+static bool
+wma_injection_debug_cache_submit_done(uint32_t desc_id, bool submitted)
+{
+	struct wma_injection_debug_info *entry;
+	qdf_nbuf_t release_buf = NULL;
+	uint32_t slot;
+	bool completion_seen = false;
+	bool had_buf = false;
+
+	if (!desc_id)
+		return false;
+
+	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	entry = &g_wma_injection_debug_cache[slot];
+	if (entry->valid && entry->desc_id == desc_id &&
+	    entry->submit_pending) {
+		completion_seen = entry->completion_pending;
+		entry->submit_pending = false;
+
+		if (submitted && !completion_seen) {
+			/* Accepted by WMI; wait for its completion or the reaper. */
+			entry->submit_ts = qdf_get_log_timestamp();
+		} else {
+			had_buf = entry->tx_buf != NULL;
+			if (completion_seen)
+				release_buf = entry->tx_buf;
+
+			/*
+			 * If WMI rejected synchronously without a completion,
+			 * detach but do not free: ownership returns to the caller
+			 * so it may try the CDP fallback.
+			 */
+			entry->tx_buf = NULL;
+			entry->valid = false;
+			entry->completion_pending = false;
+			if (had_buf)
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		}
+	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	if (release_buf) {
+		wma_injection_unmap_tx_buf(release_buf);
+		qdf_nbuf_free(release_buf);
+	}
+
+	return completion_seen;
 }
 
 /**
@@ -1115,7 +1205,8 @@ static void wma_injection_reaper_work_cb(void *context)
 		 */
 		qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 		e = &g_wma_injection_debug_cache[i];
-		if (e->valid && e->tx_buf && e->submit_ts) {
+		if (e->valid && e->tx_buf && !e->submit_pending &&
+		    e->submit_ts) {
 			/* Timestamp delta is converted from QTI log ticks to usecs. */
 			age_us = qdf_log_timestamp_to_usecs(now_ts - e->submit_ts);
 			if (age_us >= WMA_INJECTION_NBUF_TIMEOUT_US) {
@@ -1744,8 +1835,14 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * override this; the log below records the requested setting.
 	 */
 	mgmt_params.use_6mbps = (monitor_vdev && !req->tx_rate) ? 1 : 0;
-	wma_injection_debug_cache_update(mgmt_params.desc_id, req, fc_type,
-					 fc_subtype, mgmt_params.chanfreq);
+	if (!wma_injection_debug_cache_update(mgmt_params.desc_id, req,
+					      fc_type, fc_subtype,
+					      mgmt_params.chanfreq, wmi_buf)) {
+		wma_err("Injection: unable to reserve debug-cache slot for desc_id=%u",
+			mgmt_params.desc_id);
+		qdf_nbuf_free(wmi_buf);
+		return QDF_STATUS_E_RESOURCES;
+	}
 
 	/* Set transmission rate if specified in injection request */
 	if (req->tx_rate != 0) {
@@ -1837,34 +1934,21 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
 	if (!QDF_IS_STATUS_ERROR(status)) {
 		wmi_tx_ok = true;
-		/*
-		 * LL path: firmware DMA-reads from the nbuf we passed as
-		 * tx_frame.  Track it so the completion handler can unmap
-		 * and free it.  On HL the unmap is a no-op.
-		 */
-		{
-			uint32_t slot = mgmt_params.desc_id %
-					WMA_INJECTION_DEBUG_CACHE_SIZE;
-			struct wma_injection_debug_info *e;
-			bool cache_entry_found = false;
-
-			qdf_spin_lock_bh(&g_wma_injection_cache_lock);
-			e = &g_wma_injection_debug_cache[slot];
-			if (e->valid && e->desc_id == mgmt_params.desc_id) {
-				e->tx_buf = wmi_buf;
-				e->submit_ts = qdf_get_log_timestamp();
-				qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
-				cache_entry_found = true;
-			}
-			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
-
-			if (!cache_entry_found)
-				wma_err("Injection: no cache entry for submitted desc_id=%u",
-					mgmt_params.desc_id);
-		}
 	} else {
 		wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
 			 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
+	}
+
+	/*
+	 * The buffer was registered before WMI submission. Reconcile submit
+	 * state only after that call returns; an early completion has set
+	 * completion_pending rather than freeing the buffer from its callback.
+	 */
+	if (wma_injection_debug_cache_submit_done(mgmt_params.desc_id,
+						   wmi_tx_ok)) {
+		/* Completion raced with submit return: never reuse this nbuf. */
+		wmi_tx_ok = true;
+		status = QDF_STATUS_SUCCESS;
 	}
 
 	if (!wmi_tx_ok) {
