@@ -104,7 +104,6 @@ static QDF_STATUS hdd_validate_frame_header(uint8_t *frame_data,
 {
 	struct ieee80211_frame *frame;
 	uint8_t frame_type, frame_subtype;
-	uint16_t frame_control;
 
 	if (!frame_data) {
 		hdd_validate_err("Frame data is NULL");
@@ -117,7 +116,6 @@ static QDF_STATUS hdd_validate_frame_header(uint8_t *frame_data,
 	}
 
 	frame = (struct ieee80211_frame *)frame_data;
-	frame_control = (frame->i_fc[1] << 8) | frame->i_fc[0];
 
 	/* Validate frame version */
 	if (frame->i_fc[0] & 0x03) {
