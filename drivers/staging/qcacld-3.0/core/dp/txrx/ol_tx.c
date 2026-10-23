@@ -190,6 +190,8 @@ ol_txrx_mgmt_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 #ifdef QCA_LL_TX_FLOW_GLOBAL_MGMT_POOL
 	mgmt_pool_dbg = pdev->mgmt_pool;
 #endif
+	/* Management TX only initializes a subset of this metadata. */
+	qdf_mem_zero(&tx_msdu_info, sizeof(tx_msdu_info));
 	tx_msdu_info.tso_info.is_tso = 0;
 
 	tx_msdu_info.htt.action.use_6mbps = use_6mbps;
