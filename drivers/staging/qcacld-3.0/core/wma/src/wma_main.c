@@ -5755,8 +5755,6 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 	target_resource_config *wlan_res_cfg;
 	struct wmi_unified *wmi_handle;
 	uint32_t *service_bitmap;
-	bool mgmt_tx_wmi_supported;
-	bool register_mgmt_tx_events;
 
 	WMA_LOGD("%s: Enter", __func__);
 
@@ -5872,25 +5870,8 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 		     service_bitmap,
 		     sizeof(wma_handle->wmi_service_bitmap));
 
-	mgmt_tx_wmi_supported =
-		wmi_service_enabled(wmi_handle, wmi_service_mgmt_tx_wmi);
 	cdp_cfg_tx_set_is_mgmt_over_wmi_enabled(soc,
-						mgmt_tx_wmi_supported);
-	register_mgmt_tx_events = mgmt_tx_wmi_supported;
-#ifdef FEATURE_FRAME_INJECTION_SUPPORT
-	/*
-	 * Frame injection calls the WMI mgmt-TX encoder directly with a hidden
-	 * STA vdev. The encoder is installed independently of the advertised
-	 * service bitmap; register completions as well, or LL TX buffers cannot
-	 * be unmapped/freed by wma_process_mgmt_tx_completion().
-	 *
-	 * Keep normal management TX routed over HTT when the bit is absent.
-	 */
-	if (!mgmt_tx_wmi_supported) {
-		register_mgmt_tx_events = true;
-		WMA_LOGW("WMI mgmt-TX service bit is absent; enabling completion events for injection-only WMI attempts");
-	}
-#endif
+		wmi_service_enabled(wmi_handle, wmi_service_mgmt_tx_wmi));
 	cdp_set_desc_global_pool_size(soc, ev->num_msdu_desc);
 	/* SWBA event handler for beacon transmission */
 	status = wma_register_swba_events(wma_handle->wmi_handle);
@@ -5924,17 +5905,11 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 		}
 	}
 
-	if (mgmt_tx_wmi_supported) {
+	if (wmi_service_enabled(wmi_handle, wmi_service_mgmt_tx_wmi)) {
 		WMA_LOGD("Firmware supports management TX over WMI,use WMI interface instead of HTT for management Tx");
-	} else {
-		WMA_LOGE("FW doesnot advertise WMI_SERVICE_MGMT_TX_WMI; regular management TX remains on HTT");
-	}
-
-	if (register_mgmt_tx_events) {
 		/*
-		 * Register completion events for standard WMI mgmt TX and the
-		 * injection-only path. Event IDs are defined by the host WMI TLV
-		 * layer even when the firmware does not advertise this service bit.
+		 * Register Tx completion event handler for MGMT Tx over WMI
+		 * case
 		 */
 		status = wmi_unified_register_event_handler(
 					wmi_handle,
@@ -5942,7 +5917,7 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 					wma_mgmt_tx_completion_handler,
 					WMA_RX_SERIALIZER_CTX);
 		if (QDF_IS_STATUS_ERROR(status)) {
-			WMA_LOGE("Failed to register MGMT TX completion handler");
+			WMA_LOGE("Failed to register MGMT over WMI completion handler");
 			goto free_hw_mode_list;
 		}
 
@@ -5952,9 +5927,12 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 				wma_mgmt_tx_bundle_completion_handler,
 				WMA_RX_SERIALIZER_CTX);
 		if (QDF_IS_STATUS_ERROR(status)) {
-			WMA_LOGE("Failed to register MGMT TX bundle completion handler");
+			WMA_LOGE("Failed to register MGMT over WMI completion handler");
 			goto free_hw_mode_list;
 		}
+
+	} else {
+		WMA_LOGE("FW doesnot support WMI_SERVICE_MGMT_TX_WMI, Use HTT interface for Management Tx");
 	}
 
 	status = wma_register_gtk_offload_event(wma_handle);
