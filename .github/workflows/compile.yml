@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - work/monitor-mode-stability-injection
+      - 'inject-*'
 
 concurrency:
   group: monitor-mode-kernel-build-${{ github.ref }}
@@ -17,7 +18,7 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: work/monitor-mode-stability-injection
+          ref: ${{ github.ref }}
 
       - name: Setup Build Environment
         run: |
