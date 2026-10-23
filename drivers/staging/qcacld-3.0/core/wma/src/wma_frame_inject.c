@@ -1736,7 +1736,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			NULL,                   // 7. tx_frm_download_comp_cb (пропускаємо)
 			NULL,                   // 8. pData (немає додаткових даних)
 			NULL,                   // 9. tx_frm_ota_comp_cb (пропускаємо)
-			0,                      // 10. tx_flag
+			4,                      // 10. tx_flag
 			vdev_id,                // 11. vdev_id
 			false,                  // 12. tdls_flag
 			tx_chanfreq,            // 13. channel_freq
