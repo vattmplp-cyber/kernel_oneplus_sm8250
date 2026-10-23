@@ -2809,6 +2809,18 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 		chanfreq = 0;
 	}
 
+	/*
+	 * Some management callers don't carry channel_freq. For management
+	 * frames only, use the active vdev frequency as a fallback instead
+	 * of forwarding a zero channel to the lower TX path.
+	 */
+	if (frmType == TXRX_FRM_802_11_MGMT && !chanfreq &&
+	    iface->mhz) {
+		chanfreq = iface->mhz;
+		WMA_LOGD("%s: mgmt TX channel fallback to vdev frequency %u MHz (vdev %u)",
+			 __func__, chanfreq, vdev_id);
+	}
+
 	if (mac->mlme_cfg->gen.debug_packet_log & 0x1) {
 		if ((pFc->type == SIR_MAC_MGMT_FRAME) &&
 		    (pFc->subType != SIR_MAC_MGMT_PROBE_REQ) &&
@@ -2831,6 +2843,11 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 	mgmt_param.qdf_ctx = cds_get_context(QDF_MODULE_ID_QDF_DEVICE);
 	mgmt_param.use_6mbps = use_6mbps;
 	mgmt_param.tx_type = tx_frm_index;
+
+	if (frmType == TXRX_FRM_802_11_MGMT)
+		WMA_LOGD("%s: MGMT tx params vdev=%u chanfreq=%u use_6mbps=%u rid=%u",
+			 __func__, vdev_id, mgmt_param.chanfreq,
+			 mgmt_param.use_6mbps, rid);
 
 	/*
 	 * Update the tx_params TLV only for rates
