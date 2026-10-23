@@ -1720,7 +1720,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
-		/*
+	/*
 	 * The service bitmap can omit mgmt_tx_wmi on this firmware even though
 	 * the WMI command encoder is present. Do not divert monitor frames to
 	 * wma_tx_packet() with the MONITOR vdev: that bypasses the hidden STA
@@ -1733,7 +1733,6 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		wma_warn("Injection: mgmt_tx_wmi service bit is 0; still trying WMI TX via hidden STA vdev");
 		inject_wmi_service_absent_logged = true;
 	}
-
 
 	if (monitor_vdev) {
 		/*
