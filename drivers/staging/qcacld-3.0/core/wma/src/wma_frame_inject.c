@@ -1931,7 +1931,13 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		if (QDF_IS_STATUS_ERROR(status)) {
 			wma_err("Legacy management TX failed: %d (wmi_attempted=%u)",
 				status, wmi_tx_attempted ? 1 : 0);
-			/* wmi_buf has either been consumed or freed at this point. */
+			/*
+			 * ol_txrx_mgmt_send_ext() returns before descriptor ownership
+			 * transfer when vdev lookup or descriptor allocation fails.
+			 * In those rejection paths CDP has not consumed this nbuf.
+			 */
+			if (ret == -EINVAL || ret == QDF_STATUS_E_FAULT)
+				qdf_nbuf_free(wmi_buf);
 			return status;
 		}
 	}
