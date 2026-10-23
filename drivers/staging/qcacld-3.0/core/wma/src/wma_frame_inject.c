@@ -1621,6 +1621,9 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	if (wma_handle->interfaces[vdev_id].mhz)
 		tx_chanfreq = wma_handle->interfaces[vdev_id].mhz;
 
+	if (!tx_chanfreq)
+		wma_warn("Injection: tx_chanfreq is 0, firmware may use wrong channel");
+
 	if (req->frame_len)
 		fc0 = req->frame_data[0];
 
@@ -1731,7 +1734,12 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	mgmt_params.macaddr = NULL; /* No specific MAC address */
 	mgmt_params.qdf_ctx = qdf_ctx;
 	mgmt_params.tx_params_valid = false; /* Use default TX parameters */
-	mgmt_params.use_6mbps = 0; /* Use rate from injection request if specified */
+	/*
+	 * Diagnostic experiment for WCN6855: request 6 Mbps for monitor
+	 * injection when the caller did not specify a rate. Firmware may
+	 * override this; the log below records the requested setting.
+	 */
+	mgmt_params.use_6mbps = (monitor_vdev && !req->tx_rate) ? 1 : 0;
 	wma_injection_debug_cache_update(mgmt_params.desc_id, req, fc_type,
 					 fc_subtype, mgmt_params.chanfreq);
 
@@ -1811,7 +1819,18 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			 mgmt_params.vdev_id);
 		inject_wmi_path_logged = true;
 	}
+	if (inject_send_info_count <= 10) {
+		wma_info("Injection WMI submit: vdev_id=%u chanfreq=%u len=%u use_6mbps=%u tx_params_valid=%u tx_rate=%u",
+			 mgmt_params.vdev_id, mgmt_params.chanfreq,
+			 req->frame_len, mgmt_params.use_6mbps,
+			 mgmt_params.tx_params_valid ? 1 : 0, req->tx_rate);
+		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_WMA, QDF_TRACE_LEVEL_INFO,
+				   req->frame_data,
+				   QDF_MIN(32, req->frame_len));
+	}
+
 	status = wmi_mgmt_unified_cmd_send(wma_handle->wmi_handle, &mgmt_params);
+	wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
 	if (!QDF_IS_STATUS_ERROR(status)) {
 		wmi_tx_ok = true;
 		/*
@@ -1869,10 +1888,23 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		/* Set frame control information for legacy path */
 		QDF_NBUF_CB_MGMT_TXRX_DESC_ID(wmi_buf) = mgmt_params.desc_id;
 
+		if (inject_send_info_count <= 10) {
+			wma_info("Injection via Data Path: vdev_id=%u chanfreq=%u len=%u use_6mbps=%u tx_params_valid=%u",
+				 mgmt_params.vdev_id, mgmt_params.chanfreq,
+				 req->frame_len, mgmt_params.use_6mbps,
+				 mgmt_params.tx_params_valid ? 1 : 0);
+			if (!mgmt_params.chanfreq)
+				wma_warn("Injection: tx_chanfreq is 0, firmware may use wrong channel");
+			QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_WMA, QDF_TRACE_LEVEL_INFO,
+					   req->frame_data,
+					   QDF_MIN(32, req->frame_len));
+		}
+
 		ret = cdp_mgmt_send_ext(soc, mgmt_params.vdev_id, wmi_buf,
 					mgmt_params.tx_type,
 					mgmt_params.use_6mbps,
 					mgmt_params.chanfreq);
+		wma_info("cdp_mgmt_send_ext returned: %d", ret);
 		if (ret == -EINVAL)
 			wma_warn("Legacy management TX got -EINVAL (desc alloc or tx pool reject)");
 		status = qdf_status_from_os_return(ret);
