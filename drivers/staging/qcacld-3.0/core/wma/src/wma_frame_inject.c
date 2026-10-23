@@ -1580,6 +1580,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	void *qdf_ctx;
 	int ret;
 	uint16_t tx_chanfreq = 0;
+	uint8_t dp_vdev_id;
 	uint8_t fc0 = 0;
 	uint8_t fc_type = 0;
 	uint8_t fc_subtype = 0;
@@ -1910,16 +1911,27 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			wma_info("Injection: WMI failed, falling back to cdp_mgmt_send_ext (Data Path)");
 
 		/*
-		 * WMI uses the firmware-only helper vdev for monitor injection,
-		 * but CDP resolves vdev_id against host datapath vdevs.  The helper
-		 * has no host/CDP vdev, so use the original monitor vdev here.
+		 * The monitor vdev is tracked separately by CDP on some builds.
+		 * Resolve its canonical datapath ID instead of relying on the
+		 * caller's ID or the firmware-only injection helper's ID.
 		 */
-		if (monitor_vdev && mgmt_params.vdev_id != vdev_id)
-			wma_warn("Injection Data Path: using original monitor vdev_id=%u instead of hidden STA vdev_id=%u",
-				 vdev_id, mgmt_params.vdev_id);
+		dp_vdev_id = mgmt_params.vdev_id;
+		if (monitor_vdev) {
+			dp_vdev_id = cdp_get_mon_vdev_from_pdev(soc,
+								OL_TXRX_PDEV_ID);
+			if (dp_vdev_id == (uint8_t)-EINVAL) {
+				wma_err("Injection Data Path: CDP monitor vdev is unavailable (requested vdev_id=%u)",
+					vdev_id);
+				qdf_nbuf_free(wmi_buf);
+				return QDF_STATUS_E_FAULT;
+			}
 
-		ret = cdp_mgmt_send_ext(soc, monitor_vdev ? vdev_id :
-					mgmt_params.vdev_id, wmi_buf,
+			if (dp_vdev_id != vdev_id)
+				wma_warn("Injection Data Path: resolved CDP monitor vdev_id=%u (requested=%u, hidden WMI vdev=%u)",
+					 dp_vdev_id, vdev_id, mgmt_params.vdev_id);
+		}
+
+		ret = cdp_mgmt_send_ext(soc, dp_vdev_id, wmi_buf,
 					mgmt_params.tx_type,
 					mgmt_params.use_6mbps,
 					mgmt_params.chanfreq);

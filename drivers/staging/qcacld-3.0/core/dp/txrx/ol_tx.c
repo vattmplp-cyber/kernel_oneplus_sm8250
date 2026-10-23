@@ -175,13 +175,26 @@ ol_txrx_mgmt_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 		      uint8_t use_6mbps, uint16_t chanfreq)
 {
 	struct ol_txrx_soc_t *soc = cdp_soc_t_to_ol_txrx_soc_t(soc_hdl);
+	struct ol_txrx_pdev_t *pdev =
+		ol_txrx_get_pdev_from_pdev_id(soc, OL_TXRX_PDEV_ID);
 	ol_txrx_vdev_handle vdev = ol_txrx_get_vdev_from_soc_vdev_id(soc,
 								     vdev_id);
-	struct ol_txrx_pdev_t *pdev;
 	struct ol_tx_desc_t *tx_desc;
 	struct ol_txrx_msdu_info_t tx_msdu_info;
 	int result = 0;
 	void *mgmt_pool_dbg = NULL;
+
+	/*
+	 * Monitor vdevs may be tracked separately from pdev->vdev_list.
+	 * If the ID lookup missed, use the dedicated monitor handle only
+	 * when it refers to the requested vdev ID.
+	 */
+	if ((!vdev || !vdev->pdev) && pdev && pdev->monitor_vdev &&
+	    pdev->monitor_vdev->vdev_id == vdev_id) {
+		vdev = pdev->monitor_vdev;
+		ol_txrx_dbg("mgmt TX: resolved monitor vdev %u from pdev->monitor_vdev",
+			    vdev_id);
+	}
 
 	if (!vdev || !vdev->pdev)
 		return QDF_STATUS_E_FAULT;

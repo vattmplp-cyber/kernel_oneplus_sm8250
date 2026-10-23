@@ -2164,6 +2164,14 @@ ol_txrx_vdev_detach(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	TXRX_ASSERT2(vdev);
 	pdev = vdev->pdev;
 
+	/*
+	 * The management-TX fallback can consult this standalone monitor
+	 * handle when the vdev is not found in vdev_list. Clear it before
+	 * detach can defer deletion or free the vdev.
+	 */
+	if (pdev->monitor_vdev == vdev)
+		pdev->monitor_vdev = NULL;
+
 	/* prevent anyone from restarting the ll_pause timer again */
 	qdf_atomic_set(&vdev->delete.detaching, 1);
 
