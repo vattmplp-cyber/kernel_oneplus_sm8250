@@ -1239,16 +1239,20 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 
 	wma_debug("Deinitializing WMA injection queue");
 
-	/* Destroy hidden injection TX vdev if present */
-	wma_injection_destroy_tx_vdev(wma_handle);
-
-	/* Cancel any pending work */
-	qdf_cancel_work(&ctx->queue_work);
-	qdf_flush_work(&ctx->queue_work);
-	
-	/* Cancel and destroy delayed work */
+	/*
+	 * Stop producers before tearing down the firmware-only TX vdev.
+	 * Destroying the vdev while queue_work is inside the send path can
+	 * race a management TX against PEER_DELETE/VDEV_STOP/VDEV_DELETE.
+	 */
 	qdf_delayed_work_stop_sync(&ctx->delayed_work);
 	qdf_delayed_work_destroy(&ctx->delayed_work);
+
+	/* Cancel and drain any active injection send before vdev teardown. */
+	qdf_cancel_work(&ctx->queue_work);
+	qdf_flush_work(&ctx->queue_work);
+
+	/* Destroy hidden injection TX vdev only after sends are quiesced. */
+	wma_injection_destroy_tx_vdev(wma_handle);
 
 	/* Stop and destroy reaper timer */
 	qdf_delayed_work_stop_sync(&ctx->reaper_work);
