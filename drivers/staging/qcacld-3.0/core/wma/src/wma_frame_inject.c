@@ -1905,7 +1905,17 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		if (monitor_vdev)
 			wma_info("Injection: WMI failed, falling back to cdp_mgmt_send_ext (Data Path)");
 
-		ret = cdp_mgmt_send_ext(soc, mgmt_params.vdev_id, wmi_buf,
+		/*
+		 * WMI uses the firmware-only helper vdev for monitor injection,
+		 * but CDP resolves vdev_id against host datapath vdevs.  The helper
+		 * has no host/CDP vdev, so use the original monitor vdev here.
+		 */
+		if (monitor_vdev && mgmt_params.vdev_id != vdev_id)
+			wma_warn("Injection Data Path: using original monitor vdev_id=%u instead of hidden STA vdev_id=%u",
+				 vdev_id, mgmt_params.vdev_id);
+
+		ret = cdp_mgmt_send_ext(soc, monitor_vdev ? vdev_id :
+					mgmt_params.vdev_id, wmi_buf,
 					mgmt_params.tx_type,
 					mgmt_params.use_6mbps,
 					mgmt_params.chanfreq);
