@@ -1720,46 +1720,25 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
-		if (monitor_vdev && !wmi_mgmt_service) {
-		QDF_STATUS fallback_status;
-		uint16_t frame_len = qdf_nbuf_len(wmi_buf);
-
-		wma_info("Fallback Active: Routing frame via wma_tx_packet Data Path.");
-
-		fallback_status = wma_tx_packet(
-			wma_handle,             // 1. wma_context
-			wmi_buf,                // 2. tx_frame
-			frame_len,              // 3. frmLen
-			TXRX_FRM_802_11_MGMT,   // 4. frmType
-			0,         // 5. txDir (management frame has no DS direction)
-			0,                      // 6. tid
-			NULL,                   // 7. tx_frm_download_comp_cb (пропускаємо)
-			NULL,                   // 8. pData (немає додаткових даних)
-			NULL,                   // 9. tx_frm_ota_comp_cb (пропускаємо)
-			4,                      // 10. tx_flag
-			vdev_id,                // 11. vdev_id
-			false,                  // 12. tdls_flag
-			tx_chanfreq,            // 13. channel_freq
-			0                       // 14. rateid rid
-		);
-
-				if (fallback_status != QDF_STATUS_SUCCESS) {
-			wma_err("Data path fallback failed, status = %d", fallback_status);
-			// ПРИБРАЛИ qdf_nbuf_free(wmi_buf), щоб не було double-free!
-			return fallback_status;
-		}
-
-
-		return QDF_STATUS_SUCCESS;
+	/*
+	 * The service bitmap can omit mgmt_tx_wmi on this firmware even though
+	 * the WMI command encoder is present. Do not divert monitor frames to
+	 * wma_tx_packet() with the MONITOR vdev: that bypasses the hidden STA
+	 * helper vdev below and cannot work around the firmware vdev-type check.
+	 * Attempt the WMI command using the helper STA vdev regardless of this
+	 * capability bit; the command's actual return/completion is authoritative.
+	 */
+	if (monitor_vdev && !wmi_mgmt_service &&
+	    !inject_wmi_service_absent_logged) {
+		wma_warn("Injection: mgmt_tx_wmi service bit is 0; still trying WMI TX via hidden STA vdev");
+		inject_wmi_service_absent_logged = true;
 	}
-
-
 
 	if (monitor_vdev) {
 		/*
 		 * FW _wlan_send_mgmt_to_host rejects MONITOR vdevs (falls
-		 * to a beacon-only path → DISCARD).  Route through a hidden
-		 * AP vdev instead, which the FW accepts for mgmt TX.
+		 * to a beacon-only path → DISCARD). Route through the hidden
+		 * STA helper vdev, which has a self-peer for the FW TX path.
 		 */
 		status = wma_injection_ensure_tx_vdev(wma_handle,
 						     vdev_id, tx_chanfreq);
@@ -1771,7 +1750,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		}
 		mgmt_params.vdev_id = g_inj_tx_vdev.vdev_id;
 		if (!inject_monitor_no_legacy_logged) {
-			wma_warn("Injection monitor: using hidden AP vdev %u for TX (monitor vdev %u)",
+			wma_warn("Injection monitor: using hidden STA vdev %u for TX (monitor vdev %u)",
 				 g_inj_tx_vdev.vdev_id, vdev_id);
 			inject_monitor_no_legacy_logged = true;
 		}
