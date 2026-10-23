@@ -5905,34 +5905,28 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 		}
 	}
 
-	if (wmi_service_enabled(wmi_handle, wmi_service_mgmt_tx_wmi)) {
-		WMA_LOGD("Firmware supports management TX over WMI,use WMI interface instead of HTT for management Tx");
-		/*
-		 * Register Tx completion event handler for MGMT Tx over WMI
-		 * case
-		 */
-		status = wmi_unified_register_event_handler(
-					wmi_handle,
-					wmi_mgmt_tx_completion_event_id,
-					wma_mgmt_tx_completion_handler,
-					WMA_RX_SERIALIZER_CTX);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			WMA_LOGE("Failed to register MGMT over WMI completion handler");
-			goto free_hw_mode_list;
-		}
+	/*
+	 * Register unconditionally because injection path may send mgmt tx
+	 * even when service bit is 0.
+	 */
+	status = wmi_unified_register_event_handler(
+			wmi_handle,
+			wmi_mgmt_tx_completion_event_id,
+			wma_mgmt_tx_completion_handler,
+			WMA_RX_SERIALIZER_CTX);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		WMA_LOGE("Failed to register MGMT over WMI completion handler");
+		goto free_hw_mode_list;
+	}
 
-		status = wmi_unified_register_event_handler(
-				wmi_handle,
-				wmi_mgmt_tx_bundle_completion_event_id,
-				wma_mgmt_tx_bundle_completion_handler,
-				WMA_RX_SERIALIZER_CTX);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			WMA_LOGE("Failed to register MGMT over WMI completion handler");
-			goto free_hw_mode_list;
-		}
-
-	} else {
-		WMA_LOGE("FW doesnot support WMI_SERVICE_MGMT_TX_WMI, Use HTT interface for Management Tx");
+	status = wmi_unified_register_event_handler(
+			wmi_handle,
+			wmi_mgmt_tx_bundle_completion_event_id,
+			wma_mgmt_tx_bundle_completion_handler,
+			WMA_RX_SERIALIZER_CTX);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		WMA_LOGE("Failed to register MGMT over WMI bundle completion handler");
+		goto free_hw_mode_list;
 	}
 
 	status = wma_register_gtk_offload_event(wma_handle);
