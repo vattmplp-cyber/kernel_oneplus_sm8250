@@ -178,6 +178,7 @@ struct wma_injection_debug_info {
 
 static struct wma_injection_debug_info
 	g_wma_injection_debug_cache[WMA_INJECTION_DEBUG_CACHE_SIZE];
+static qdf_spinlock_t g_wma_injection_cache_lock;
 
 /*
  * Hidden AP vdev for injection TX on monitor mode.
@@ -636,24 +637,27 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 				 uint16_t chanfreq)
 {
 	struct wma_injection_debug_info *entry;
+	qdf_nbuf_t stale_buf = NULL;
+	uint32_t stale_desc_id = 0;
 	uint32_t slot;
 
 	if (!desc_id || !req || !req->frame_data)
 		return;
 
 	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
+
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 	entry = &g_wma_injection_debug_cache[slot];
 
 	/*
 	 * If this slot was previously used for a different desc_id whose
-	 * completion never arrived, free the leaked nbuf now.
+	 * completion never arrived, detach its buffer while holding the lock.
 	 */
 	if (entry->valid && entry->tx_buf && entry->desc_id != desc_id) {
-		wma_warn("Injection nbuf leak cleanup: stale desc_id=%u",
-			 entry->desc_id);
-		wma_injection_unmap_tx_buf(entry->tx_buf);
-		qdf_nbuf_free(entry->tx_buf);
+		stale_desc_id = entry->desc_id;
+		stale_buf = entry->tx_buf;
 		entry->tx_buf = NULL;
+		qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
 	}
 
 	entry->valid = false;
@@ -675,23 +679,47 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	}
 
 	entry->valid = true;
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	if (stale_buf) {
+		wma_warn("Injection nbuf leak cleanup: stale desc_id=%u",
+			 stale_desc_id);
+		wma_injection_unmap_tx_buf(stale_buf);
+		qdf_nbuf_free(stale_buf);
+	}
 }
 
-static struct wma_injection_debug_info *
-wma_injection_debug_cache_get(uint32_t desc_id)
+/*
+ * Claim a completion entry atomically.  The caller owns snapshot->tx_buf
+ * after success; the cache is invalidated before the lock is released so
+ * the reaper cannot free the same buffer.
+ */
+static bool
+wma_injection_debug_cache_get(uint32_t desc_id,
+			      struct wma_injection_debug_info *snapshot)
 {
 	struct wma_injection_debug_info *entry;
 	uint32_t slot;
+	bool found = false;
 
-	if (!desc_id)
-		return NULL;
+	if (!desc_id || !snapshot)
+		return false;
 
 	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
-	entry = &g_wma_injection_debug_cache[slot];
-	if (!entry->valid || entry->desc_id != desc_id)
-		return NULL;
 
-	return entry;
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	entry = &g_wma_injection_debug_cache[slot];
+	if (entry->valid && entry->desc_id == desc_id) {
+		*snapshot = *entry;
+		entry->tx_buf = NULL;
+		entry->valid = false;
+		if (snapshot->tx_buf)
+			qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		found = true;
+	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	return found;
 }
 
 /**
@@ -1076,29 +1104,39 @@ static void wma_injection_reaper_work_cb(void *context)
 	now_ts = qdf_get_log_timestamp();
 
 	for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
-		struct wma_injection_debug_info *e =
-			&g_wma_injection_debug_cache[i];
+		struct wma_injection_debug_info *e;
+		qdf_nbuf_t stale_buf = NULL;
+		uint32_t stale_desc_id = 0;
+		uint8_t fc_type = 0, fc_subtype = 0;
 
-		if (!e->valid || !e->tx_buf || !e->submit_ts)
-			continue;
-
-		/* qdf_get_log_timestamp() ticks at 19.2 MHz on QTI SoCs;
-		 * convert delta to microseconds.
+		/*
+		 * Atomically claim stale entries so completion, cache-slot reuse,
+		 * and reaper cannot release the same nbuf.
 		 */
-		age_us = qdf_log_timestamp_to_usecs(now_ts - e->submit_ts);
+		qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+		e = &g_wma_injection_debug_cache[i];
+		if (e->valid && e->tx_buf && e->submit_ts) {
+			/* Timestamp delta is converted from QTI log ticks to usecs. */
+			age_us = qdf_log_timestamp_to_usecs(now_ts - e->submit_ts);
+			if (age_us >= WMA_INJECTION_NBUF_TIMEOUT_US) {
+				stale_buf = e->tx_buf;
+				stale_desc_id = e->desc_id;
+				fc_type = e->fc_type;
+				fc_subtype = e->fc_subtype;
+				e->tx_buf = NULL;
+				e->valid = false;
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+			}
+		}
+		qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
-		if (age_us < WMA_INJECTION_NBUF_TIMEOUT_US)
-			continue;
-
-		wma_debug("Reaper: freeing stale desc_id=%u age=%llu us fc=0x%02x/0x%02x",
-			  e->desc_id, age_us, e->fc_type, e->fc_subtype);
-
-		wma_injection_unmap_tx_buf(e->tx_buf);
-		qdf_nbuf_free(e->tx_buf);
-		e->tx_buf = NULL;
-		e->valid = false;
-		qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
-		reaped++;
+		if (stale_buf) {
+			wma_debug("Reaper: freeing stale desc_id=%u age=%llu us fc=0x%02x/0x%02x",
+				  stale_desc_id, age_us, fc_type, fc_subtype);
+			wma_injection_unmap_tx_buf(stale_buf);
+			qdf_nbuf_free(stale_buf);
+			reaped++;
+		}
 	}
 
 	if (reaped)
@@ -1129,6 +1167,9 @@ QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 
 	wma_debug("Initializing WMA injection queue");
 
+	/* Initialize shared cache lock before any work can touch the cache. */
+	qdf_spinlock_create(&g_wma_injection_cache_lock);
+
 	/* Initialize queue */
 	qdf_list_create(&ctx->queue, WMA_FRAME_INJECT_MAX_QUEUE_SIZE);
 
@@ -1145,6 +1186,7 @@ QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 		wma_err("Failed to create delayed work: %d", status);
 		qdf_spinlock_destroy(&ctx->queue_lock);
 		qdf_list_destroy(&ctx->queue);
+		qdf_spinlock_destroy(&g_wma_injection_cache_lock);
 		return status;
 	}
 
@@ -1156,6 +1198,7 @@ QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 		qdf_delayed_work_destroy(&ctx->delayed_work);
 		qdf_spinlock_destroy(&ctx->queue_lock);
 		qdf_list_destroy(&ctx->queue);
+		qdf_spinlock_destroy(&g_wma_injection_cache_lock);
 		return status;
 	}
 
@@ -1252,20 +1295,30 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 		uint32_t nbuf_leaked = 0;
 
 		for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
-			struct wma_injection_debug_info *e =
-				&g_wma_injection_debug_cache[i];
+			struct wma_injection_debug_info *e;
+			qdf_nbuf_t stale_buf = NULL;
+
+			qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+			e = &g_wma_injection_debug_cache[i];
 			if (e->tx_buf) {
-				wma_injection_unmap_tx_buf(e->tx_buf);
-				qdf_nbuf_free(e->tx_buf);
+				stale_buf = e->tx_buf;
 				e->tx_buf = NULL;
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
 				nbuf_leaked++;
 			}
 			e->valid = false;
+			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+			if (stale_buf) {
+				wma_injection_unmap_tx_buf(stale_buf);
+				qdf_nbuf_free(stale_buf);
+			}
 		}
 		if (nbuf_leaked)
 			wma_warn("Freed %u leaked injection nbufs during deinit",
 				 nbuf_leaked);
 	}
+	qdf_spinlock_destroy(&g_wma_injection_cache_lock);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -1769,14 +1822,23 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		{
 			uint32_t slot = mgmt_params.desc_id %
 					WMA_INJECTION_DEBUG_CACHE_SIZE;
-			struct wma_injection_debug_info *e =
-				&g_wma_injection_debug_cache[slot];
+			struct wma_injection_debug_info *e;
+			bool cache_entry_found = false;
+
+			qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+			e = &g_wma_injection_debug_cache[slot];
 			if (e->valid && e->desc_id == mgmt_params.desc_id) {
 				e->tx_buf = wmi_buf;
 				e->submit_ts = qdf_get_log_timestamp();
+				qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
+				cache_entry_found = true;
 			}
+			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+			if (!cache_entry_found)
+				wma_err("Injection: no cache entry for submitted desc_id=%u",
+					mgmt_params.desc_id);
 		}
-		qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
 	} else {
 		wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
 			 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
@@ -1831,7 +1893,8 @@ QDF_STATUS wma_handle_injection_fw_response(tp_wma_handle wma_handle,
 					     uint32_t status)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
-	struct wma_injection_debug_info *dbg_entry;
+	struct wma_injection_debug_info dbg_snapshot;
+	bool have_dbg_entry;
 	const char *status_str;
 
 	if (!wma_handle) {
@@ -1865,8 +1928,12 @@ QDF_STATUS wma_handle_injection_fw_response(tp_wma_handle wma_handle,
 		break;
 	}
 
-	dbg_entry = wma_injection_debug_cache_get(desc_id);
-	if (dbg_entry) {
+	/*
+	 * Claim and invalidate the cache entry under the shared cache lock.
+	 * After the helper returns, the local snapshot exclusively owns tx_buf.
+	 */
+	have_dbg_entry = wma_injection_debug_cache_get(desc_id, &dbg_snapshot);
+	if (have_dbg_entry) {
 		/*
 		 * Log the first few completions for each status category
 		 * so the user can verify injection works, then go silent
@@ -1875,40 +1942,33 @@ QDF_STATUS wma_handle_injection_fw_response(tp_wma_handle wma_handle,
 		if (status == WMI_MGMT_TX_COMP_TYPE_COMPLETE_OK) {
 			if (ctx->stats.frames_processed < 5)
 				wma_info("Injection completion: desc_id=%u status=OK len=%u fc_type=0x%02x fc_subtype=0x%02x chanfreq=%u",
-					 desc_id, dbg_entry->frame_len,
-					 dbg_entry->fc_type, dbg_entry->fc_subtype,
-					 dbg_entry->chanfreq);
+					 desc_id, dbg_snapshot.frame_len,
+					 dbg_snapshot.fc_type, dbg_snapshot.fc_subtype,
+					 dbg_snapshot.chanfreq);
 		} else {
 			ctx->stats.fw_errors++;
 			if (ctx->stats.fw_errors <= 10)
 				wma_info("Injection completion: desc_id=%u status=%s(%u) len=%u fc_type=0x%02x fc_subtype=0x%02x chanfreq=%u addr1=%pM addr2=%pM addr3=%pM",
 					 desc_id, status_str, status,
-					 dbg_entry->frame_len,
-					 dbg_entry->fc_type, dbg_entry->fc_subtype,
-					 dbg_entry->chanfreq, dbg_entry->addr1,
-					 dbg_entry->addr2, dbg_entry->addr3);
+					 dbg_snapshot.frame_len,
+					 dbg_snapshot.fc_type, dbg_snapshot.fc_subtype,
+					 dbg_snapshot.chanfreq, dbg_snapshot.addr1,
+					 dbg_snapshot.addr2, dbg_snapshot.addr3);
 		}
 
 		/*
-		 * Release the nbuf that was DMA-mapped by send_mgmt_cmd_tlv
-		 * (LL path).  On HL the unmap is a no-op but the free is
-		 * still required.
+		 * The nbuf was detached from the cache while locked, so the reaper
+		 * cannot unmap/free it a second time.
 		 */
-		if (dbg_entry->tx_buf) {
-			wma_injection_unmap_tx_buf(dbg_entry->tx_buf);
-			qdf_nbuf_free(dbg_entry->tx_buf);
-			dbg_entry->tx_buf = NULL;
-			qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		if (dbg_snapshot.tx_buf) {
+			wma_injection_unmap_tx_buf(dbg_snapshot.tx_buf);
+			qdf_nbuf_free(dbg_snapshot.tx_buf);
 		}
-
-		dbg_entry->valid = false;
-	} else {
-		if (status != WMI_MGMT_TX_COMP_TYPE_COMPLETE_OK) {
-			ctx->stats.fw_errors++;
-			if (ctx->stats.fw_errors <= 10)
-				wma_info("Injection completion: desc_id=%u status=%s(%u)",
-					 desc_id, status_str, status);
-		}
+	} else if (status != WMI_MGMT_TX_COMP_TYPE_COMPLETE_OK) {
+		ctx->stats.fw_errors++;
+		if (ctx->stats.fw_errors <= 10)
+			wma_info("Injection completion: desc_id=%u status=%s(%u)",
+				 desc_id, status_str, status);
 	}
 
 	if (status == WMI_MGMT_TX_COMP_TYPE_COMPLETE_OK)
