@@ -1835,14 +1835,6 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * override this; the log below records the requested setting.
 	 */
 	mgmt_params.use_6mbps = (monitor_vdev && !req->tx_rate) ? 1 : 0;
-	if (!wma_injection_debug_cache_update(mgmt_params.desc_id, req,
-					      fc_type, fc_subtype,
-					      mgmt_params.chanfreq, wmi_buf)) {
-		wma_err("Injection: unable to reserve debug-cache slot for desc_id=%u",
-			mgmt_params.desc_id);
-		qdf_nbuf_free(wmi_buf);
-		return QDF_STATUS_E_RESOURCES;
-	}
 
 	/* Set transmission rate if specified in injection request */
 	if (req->tx_rate != 0) {
@@ -1911,6 +1903,21 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 				 g_inj_tx_vdev.vdev_id, vdev_id);
 			inject_monitor_no_legacy_logged = true;
 		}
+	}
+
+	/*
+	 * Reserve the cache slot only after all setup that can fail before WMI
+	 * submission (including helper-vdev creation). The cache now owns the
+	 * buffer while submit_pending is true, so a racing completion can defer
+	 * release until wmi_mgmt_unified_cmd_send() returns.
+	 */
+	if (!wma_injection_debug_cache_update(mgmt_params.desc_id, req,
+					      fc_type, fc_subtype,
+					      mgmt_params.chanfreq, wmi_buf)) {
+		wma_err("Injection: unable to reserve debug-cache slot for desc_id=%u",
+			mgmt_params.desc_id);
+		qdf_nbuf_free(wmi_buf);
+		return QDF_STATUS_E_RESOURCES;
 	}
 
 	/* Attempt WMI management TX path. */
