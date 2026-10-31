@@ -78,7 +78,7 @@ ol_tx_send_batch(struct ol_txrx_pdev_t *pdev,
  * @param netbuf - the tx frame
  * @param pkt_type - what kind of non-std frame is being sent
  */
-void
+int
 ol_tx_send_nonstd(struct ol_txrx_pdev_t *pdev,
 		  struct ol_tx_desc_t *tx_desc,
 		  qdf_nbuf_t msdu, enum htt_pkt_type pkt_type);
