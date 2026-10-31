@@ -242,7 +242,7 @@ ol_tx_send_batch(struct ol_txrx_pdev_t *pdev,
 	}
 }
 
-void
+int
 ol_tx_send_nonstd(struct ol_txrx_pdev_t *pdev,
 		  struct ol_tx_desc_t *tx_desc,
 		  qdf_nbuf_t msdu, enum htt_pkt_type pkt_type)
@@ -260,7 +260,10 @@ ol_tx_send_nonstd(struct ol_txrx_pdev_t *pdev,
 			   "Error: freeing tx frame after htt_tx failed");
 		ol_tx_target_credit_incr_int(pdev, msdu_credit_consumed);
 		ol_tx_desc_frame_free_nonstd(pdev, tx_desc, 1 /* had error */);
+		return failed;
 	}
+
+	return 0;
 }
 
 static inline bool
