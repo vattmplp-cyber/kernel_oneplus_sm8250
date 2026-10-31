@@ -438,8 +438,14 @@ int ol_txrx_mgmt_send_frame(
 			tx_desc->htt_tx_desc_paddr,
 			ol_tx_desc_id(pdev, tx_desc),
 			tx_mgmt_frm,
-			&tx_msdu_info->htt, &tx_msdu_info->tso_info, NULL, 0)))
+			&tx_msdu_info->htt, &tx_msdu_info->tso_info, NULL, 0))) {
+		/*
+		 * The descriptor and nbuf have not been queued to HTT. Release
+		 * both here before reporting rejection to ol_txrx_mgmt_send_ext().
+		 */
+		ol_tx_desc_frame_free_nonstd(pdev, tx_desc, 1);
 		goto out;
+	}
 	htt_tx_desc_display(tx_desc->htt_tx_desc);
 	htt_tx_desc_set_chanfreq(tx_desc->htt_tx_desc, chanfreq);
 
