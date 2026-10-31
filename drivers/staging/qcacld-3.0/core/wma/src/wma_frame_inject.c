@@ -183,7 +183,7 @@ static struct wma_injection_debug_info
 static qdf_spinlock_t g_wma_injection_cache_lock;
 
 /*
- * Hidden AP vdev for injection TX on monitor mode.
+ * Hidden STA vdev for injection TX on monitor mode.
  *
  * The firmware's mgmt TX handler (FUN_b000fc10, _wlan_send_mgmt_to_host)
  * unconditionally rejects management frames on MONITOR vdevs: the internal
@@ -191,7 +191,7 @@ static qdf_spinlock_t g_wma_injection_cache_lock;
  * normal peer-lookup → WAL-TX path.  MONITOR(3) is shunted to a
  * beacon-only fallback (FUN_b01baa34) that always returns 5 → DISCARD.
  *
- * Work around this by creating a lightweight AP vdev on the same channel
+ * Work around this by creating a lightweight STA vdev on the same channel
  * as the monitor interface and routing injected frames through it.  The AP
  * vdev has a self-peer (stored at firmware vdev+0xc) so the firmware can
  * schedule and transmit the management frame normally.
@@ -255,12 +255,12 @@ static void wma_injection_reset_session_state(void)
 }
 
 /**
- * wma_injection_ensure_tx_vdev() - Ensure hidden AP vdev exists for TX
+ * wma_injection_ensure_tx_vdev() - Ensure hidden STA vdev exists for TX
  * @wma: WMA handle
  * @mon_vdev_id: monitor vdev id
  * @chanfreq: operating channel frequency in MHz
  *
- * Creates (or re-creates on channel change) a firmware-only AP vdev that
+ * Creates (or re-creates on channel change) a firmware-only STA vdev that
  * is used as the TX endpoint for injected management frames.
  *
  * Return: QDF_STATUS_SUCCESS when the helper vdev is ready.
@@ -1842,6 +1842,39 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		mgmt_params.tx_params_valid = true;
 	}
 
+	/*
+	 * Prefer the native CDP/HTT management TX path for monitor injection.
+	 * A successful WMI submit only means the command was queued; firmware
+	 * can silently discard the frame later (notably on the helper STA vdev),
+	 * in which case no WMI error is returned and the old fallback is skipped.
+	 *
+	 * CDP uses the real monitor vdev and sends the raw 802.11 management
+	 * frame through the datapath management queue. If CDP cannot accept
+	 * the buffer, retain ownership and fall back to the WMI helper-vdev path.
+	 */
+	if (monitor_vdev) {
+		soc = cds_get_context(QDF_MODULE_ID_SOC);
+		if (!soc) {
+			wma_err("Injection monitor: CDP SOC context is unavailable");
+			qdf_nbuf_free(wmi_buf);
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		QDF_NBUF_CB_MGMT_TXRX_DESC_ID(wmi_buf) = mgmt_params.desc_id;
+		ret = cdp_mgmt_send_ext(soc, vdev_id, wmi_buf,
+					mgmt_params.tx_type,
+					mgmt_params.use_6mbps,
+					mgmt_params.chanfreq);
+		if (!ret) {
+			wma_info("Injection monitor: accepted by CDP/HTT datapath (vdev=%u chanfreq=%u len=%u)",
+				 vdev_id, mgmt_params.chanfreq, req->frame_len);
+			return QDF_STATUS_SUCCESS;
+		}
+
+		wma_warn("Injection monitor: CDP/HTT rejected frame (%d); trying WMI helper-vdev path",
+			 ret);
+	}
+
 	if (!inject_tx_cfg_logged) {
 		wma_info("Injection TX config: vdev=%u iface_type=%u iface_subtype=%u vdev_active=%u chanfreq=%u",
 			 vdev_id,
@@ -1887,7 +1920,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		/*
 		 * FW _wlan_send_mgmt_to_host rejects MONITOR vdevs (falls
 		 * to a beacon-only path → DISCARD).  Route through a hidden
-		 * AP vdev instead, which the FW accepts for mgmt TX.
+		 * STA vdev instead, which the FW accepts for mgmt TX.
 		 */
 		status = wma_injection_ensure_tx_vdev(wma_handle,
 						     vdev_id, tx_chanfreq);
@@ -1899,7 +1932,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		}
 		mgmt_params.vdev_id = g_inj_tx_vdev.vdev_id;
 		if (!inject_monitor_no_legacy_logged) {
-			wma_warn("Injection monitor: using hidden AP vdev %u for TX (monitor vdev %u)",
+			wma_warn("Injection monitor: using hidden STA vdev %u for TX (monitor vdev %u)",
 				 g_inj_tx_vdev.vdev_id, vdev_id);
 			inject_monitor_no_legacy_logged = true;
 		}
