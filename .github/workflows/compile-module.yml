@@ -4,7 +4,14 @@ on:
   push:
     paths:
       - 'drivers/misc/kconsole/**'
+      - '.github/workflows/compile-module.yml'
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git branch, tag, or commit to build'
+        required: true
+        default: 'data-path-debug-c7'
+        type: string
 
 jobs:
   build-module:
@@ -14,7 +21,12 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: 13.1-new2
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      - name: Show selected source
+        run: |
+          echo "Selected ref: ${{ inputs.source_ref || github.ref }}"
+          git rev-parse HEAD
 
       - name: Setup Build Environment
         run: |
@@ -25,31 +37,32 @@ jobs:
         run: |
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          
-          echo "=== 1. Створення базової конфігурації ==="
+
+          echo "=== 1. Create base configuration ==="
           make ARCH=arm64 CC=clang vendor/meteoric_defconfig
-          
-          echo "=== 2. УВІМКНЕННЯ ПІДТРИМКИ МОДУЛІВ (Ось де була проблема!) ==="
-          # Змінюємо .config, щоб ядро розблокувало struct module та дозволило збірку .ko
+
+          echo "=== 2. Enable module support ==="
           ./scripts/config --file .config --enable CONFIG_MODULES
           ./scripts/config --file .config --enable CONFIG_MODULE_UNLOAD
           ./scripts/config --file .config --module CONFIG_KCONSOLE
-          
-          echo "=== 3. Оновлення конфігурації ==="
+
+          echo "=== 3. Update configuration ==="
           make ARCH=arm64 CC=clang olddefconfig
-          
-          echo "=== 4. Підготовка ядра та скриптів ==="
+
+          echo "=== 4. Prepare kernel headers and scripts ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             prepare scripts
-          
-          echo "=== 5. Збірка зовнішнього модуля kconsole ==="
+
+          echo "=== 5. Build standalone kconsole module ==="
           make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             M=drivers/misc/kconsole modules
-            
-          echo "=== 6. Перевірка наявності файлу ==="
-          ls -la drivers/misc/kconsole/
+
+          echo "=== 6. Verify artifact ==="
+          test -s drivers/misc/kconsole/kconsole.ko
+          llvm-readelf -h drivers/misc/kconsole/kconsole.ko
+          sha256sum drivers/misc/kconsole/kconsole.ko
 
       - name: Upload KConsole Artifact
         uses: actions/upload-artifact@v4
