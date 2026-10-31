@@ -1842,38 +1842,6 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		mgmt_params.tx_params_valid = true;
 	}
 
-	/*
-	 * Prefer the native CDP/HTT management TX path for monitor injection.
-	 * A successful WMI submit only means the command was queued; firmware
-	 * can silently discard the frame later (notably on the helper STA vdev),
-	 * in which case no WMI error is returned and the old fallback is skipped.
-	 *
-	 * CDP uses the real monitor vdev and sends the raw 802.11 management
-	 * frame through the datapath management queue. If CDP cannot accept
-	 * the buffer, retain ownership and fall back to the WMI helper-vdev path.
-	 */
-	if (monitor_vdev) {
-		soc = cds_get_context(QDF_MODULE_ID_SOC);
-		if (!soc) {
-			wma_err("Injection monitor: CDP SOC context is unavailable");
-			qdf_nbuf_free(wmi_buf);
-			return QDF_STATUS_E_FAILURE;
-		}
-
-		QDF_NBUF_CB_MGMT_TXRX_DESC_ID(wmi_buf) = mgmt_params.desc_id;
-		ret = cdp_mgmt_send_ext(soc, vdev_id, wmi_buf,
-					mgmt_params.tx_type,
-					mgmt_params.use_6mbps,
-					mgmt_params.chanfreq);
-		if (!ret) {
-			wma_info("Injection monitor: accepted by CDP/HTT datapath (vdev=%u chanfreq=%u len=%u)",
-				 vdev_id, mgmt_params.chanfreq, req->frame_len);
-			return QDF_STATUS_SUCCESS;
-		}
-
-		wma_warn("Injection monitor: CDP/HTT rejected frame (%d); trying WMI helper-vdev path",
-			 ret);
-	}
 
 	if (!inject_tx_cfg_logged) {
 		wma_info("Injection TX config: vdev=%u iface_type=%u iface_subtype=%u vdev_active=%u chanfreq=%u",
