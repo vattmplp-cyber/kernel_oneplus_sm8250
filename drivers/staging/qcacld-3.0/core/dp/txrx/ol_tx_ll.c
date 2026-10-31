@@ -282,10 +282,8 @@ int ol_txrx_mgmt_send_frame(
 	htt_tx_desc_set_chanfreq(tx_desc->htt_tx_desc, chanfreq);
 	QDF_NBUF_CB_TX_PACKET_TRACK(tx_desc->netbuf) =
 					QDF_NBUF_TX_PKT_MGMT_TRACK;
-	ol_tx_send_nonstd(pdev, tx_desc, tx_mgmt_frm,
-			  htt_pkt_type_mgmt);
-
-	return 0;
+	return ol_tx_send_nonstd(pdev, tx_desc, tx_mgmt_frm,
+				 htt_pkt_type_mgmt);
 }
 
 #if defined(FEATURE_TSO)
