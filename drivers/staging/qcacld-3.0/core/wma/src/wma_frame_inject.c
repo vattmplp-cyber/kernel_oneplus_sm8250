@@ -1871,8 +1871,11 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 			return QDF_STATUS_SUCCESS;
 		}
 
-		wma_warn("Injection monitor: CDP/HTT rejected frame (%d); trying WMI helper-vdev path",
-			 ret);
+		wma_err("Injection CDP-only test: datapath rejected frame (%d); WMI path disabled",
+			ret);
+		if (ret == -EINVAL || ret == QDF_STATUS_E_FAULT)
+			qdf_nbuf_free(wmi_buf);
+		return qdf_status_from_os_return(ret);
 	}
 
 	if (!inject_tx_cfg_logged) {
