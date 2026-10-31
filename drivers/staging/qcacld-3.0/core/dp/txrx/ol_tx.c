@@ -258,5 +258,13 @@ ol_txrx_mgmt_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	result = ol_txrx_mgmt_send_frame(vdev, tx_desc, tx_mgmt_frm,
 						&tx_msdu_info, chanfreq);
 
+	/*
+	 * Propagate datapath rejection to the caller. In particular, the HL
+	 * implementation can reject a frame after descriptor allocation;
+	 * reporting unconditional success prevents WMA from detecting it.
+	 */
+	if (result)
+		return -EIO;
+
 	return 0;               /* accepted the tx mgmt frame */
 }
