@@ -190,8 +190,8 @@ static qdf_spinlock_t g_wma_injection_cache_lock;
  * beacon-only fallback (FUN_b01baa34) that always returns 5 → DISCARD.
  *
  * Work around this by creating a lightweight STA vdev on the same channel
- * as the monitor interface and routing injected frames through it.  The AP
- * vdev has a self-peer (stored at firmware vdev+0xc) so the firmware can
+ * as the monitor interface and routing injected frames through it.  The STA
+ * helper vdev has a self-peer so the firmware can
  * schedule and transmit the management frame normally.
  *
  * Lifecycle:
@@ -715,6 +715,38 @@ wma_injection_debug_cache_get(uint32_t desc_id,
 		entry->valid = false;
 		if (snapshot->tx_buf)
 			qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		found = true;
+	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	return found;
+}
+
+/*
+ * Attach the DMA buffer to its completion-cache entry BEFORE submitting
+ * the WMI command. Firmware completion can be delivered very quickly after
+ * submission; publishing tx_buf only after wmi_mgmt_unified_cmd_send()
+ * returns leaves a window where completion invalidates an entry with no
+ * buffer, leaking the DMA mapping.
+ */
+static bool
+wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
+{
+	struct wma_injection_debug_info *entry;
+	uint32_t slot;
+	bool found = false;
+
+	if (!desc_id || !tx_buf)
+		return false;
+
+	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
+
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	entry = &g_wma_injection_debug_cache[slot];
+	if (entry->valid && entry->desc_id == desc_id && !entry->tx_buf) {
+		entry->tx_buf = tx_buf;
+		entry->submit_ts = qdf_get_log_timestamp();
+		qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
 		found = true;
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
@@ -1587,6 +1619,8 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	bool wmi_mgmt_service;
 	bool wmi_tx_attempted = false;
 	bool wmi_tx_ok = false;
+	struct wma_injection_debug_info failed_tx_snapshot;
+	bool have_failed_tx_snapshot;
 	bool is_probe_req = false;
 	bool monitor_vdev = false;
 
@@ -1797,8 +1831,8 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	if (monitor_vdev) {
 		/*
 		 * FW _wlan_send_mgmt_to_host rejects MONITOR vdevs (falls
-		 * to a beacon-only path → DISCARD).  Route through a hidden
-		 * AP vdev instead, which the FW accepts for mgmt TX.
+		 * to a beacon-only path → DISCARD). Route through the hidden
+		 * STA helper vdev, which uses the normal peer-lookup/WAL-TX path.
 		 */
 		status = wma_injection_ensure_tx_vdev(wma_handle,
 						     vdev_id, tx_chanfreq);
@@ -1833,41 +1867,46 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 				   QDF_MIN(32, req->frame_len));
 	}
 
+	/*
+	 * Publish the buffer before WMI submission so an immediate firmware
+	 * completion can always claim and release the DMA mapping. If the cache
+	 * entry is missing, do not submit an untracked buffer to firmware.
+	 */
+	if (!wma_injection_debug_cache_set_tx_buf(mgmt_params.desc_id,
+						  wmi_buf)) {
+		wma_err("Injection: cannot attach TX buffer to cache for desc_id=%u",
+			mgmt_params.desc_id);
+		wma_injection_debug_cache_get(mgmt_params.desc_id,
+					      &failed_tx_snapshot);
+		qdf_nbuf_free(wmi_buf);
+		return QDF_STATUS_E_FAILURE;
+	}
+
 	status = wmi_mgmt_unified_cmd_send(wma_handle->wmi_handle, &mgmt_params);
 	wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
 	if (!QDF_IS_STATUS_ERROR(status)) {
 		wmi_tx_ok = true;
-		/*
-		 * LL path: firmware DMA-reads from the nbuf we passed as
-		 * tx_frame.  Track it so the completion handler can unmap
-		 * and free it.  On HL the unmap is a no-op.
-		 */
-		{
-			uint32_t slot = mgmt_params.desc_id %
-					WMA_INJECTION_DEBUG_CACHE_SIZE;
-			struct wma_injection_debug_info *e;
-			bool cache_entry_found = false;
-
-			qdf_spin_lock_bh(&g_wma_injection_cache_lock);
-			e = &g_wma_injection_debug_cache[slot];
-			if (e->valid && e->desc_id == mgmt_params.desc_id) {
-				e->tx_buf = wmi_buf;
-				e->submit_ts = qdf_get_log_timestamp();
-				qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
-				cache_entry_found = true;
-			}
-			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
-
-			if (!cache_entry_found)
-				wma_err("Injection: no cache entry for submitted desc_id=%u",
-					mgmt_params.desc_id);
-		}
 	} else {
 		wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
 			 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
 	}
 
 	if (!wmi_tx_ok) {
+		/*
+		 * WMI rejected the command, so reclaim the buffer from the cache
+		 * before freeing it or handing it to the legacy CDP path. This also
+		 * decrements inflight_count under the same lock as completion/reaper.
+		 */
+		have_failed_tx_snapshot =
+			wma_injection_debug_cache_get(mgmt_params.desc_id,
+					      &failed_tx_snapshot);
+		if (!have_failed_tx_snapshot || !failed_tx_snapshot.tx_buf) {
+			wma_err("Injection: failed WMI submit has no cache-owned buffer (desc_id=%u); skip fallback",
+				mgmt_params.desc_id);
+			return status;
+		}
+		wmi_buf = failed_tx_snapshot.tx_buf;
+
 		if (monitor_vdev) {
 			wma_warn("Injection monitor vdev: WMI TX failed (%d); dropping frame to avoid legacy firmware assert",
 				 status);
@@ -1876,12 +1915,10 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		}
 
 		/*
-		 * Use the legacy CDP Data Path if WMI management TX fails,
-		 * including for monitor injection. Keep wmi_buf alive for
-		 * cdp_mgmt_send_ext(); do not free it on this fallback path.
+		 * For non-monitor vdevs only, hand the reclaimed buffer to the
+		 * legacy CDP Data Path. Monitor-vdev failures return above because
+		 * legacy monitor management TX can enter the firmware assert path.
 		 */
-		if (monitor_vdev)
-			wma_warn("Injection monitor vdev: WMI failed, attempting CDP Data Path fallback");
 
 		/* Fallback to legacy data path if WMI TX is unavailable or failed. */
 		if (!inject_legacy_path_logged) {
@@ -1913,20 +1950,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 					   QDF_MIN(32, req->frame_len));
 		}
 
-		if (monitor_vdev)
-			wma_info("Injection: WMI failed, falling back to cdp_mgmt_send_ext (Data Path)");
-
-		/*
-		 * WMI uses the firmware-only helper vdev for monitor injection,
-		 * but CDP resolves vdev_id against host datapath vdevs.  The helper
-		 * has no host/CDP vdev, so use the original monitor vdev here.
-		 */
-		if (monitor_vdev && mgmt_params.vdev_id != vdev_id)
-			wma_warn("Injection Data Path: using original monitor vdev_id=%u instead of hidden STA vdev_id=%u",
-				 vdev_id, mgmt_params.vdev_id);
-
-		ret = cdp_mgmt_send_ext(soc, monitor_vdev ? vdev_id :
-					mgmt_params.vdev_id, wmi_buf,
+		ret = cdp_mgmt_send_ext(soc, mgmt_params.vdev_id, wmi_buf,
 					mgmt_params.tx_type,
 					mgmt_params.use_6mbps,
 					mgmt_params.chanfreq);
