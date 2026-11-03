@@ -136,6 +136,7 @@ struct wma_injection_queue_ctx {
 	qdf_atomic_t inflight_count; /* nbufs submitted to FW, not yet completed */
 	struct wma_injection_queue_stats stats;
 	bool is_initialized;
+	bool is_paused;
 };
 
 /* Statistics structure is defined in wma_frame_inject.h */
@@ -593,9 +594,23 @@ static void wma_injection_destroy_tx_vdev(tp_wma_handle wma)
  */
 void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 {
+	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
+
 	if (!wma_handle) {
 		wma_err("Invalid WMA handle for pre-stop cleanup");
 		return;
+	}
+
+	/*
+	 * Stop accepting and draining queued management frames before removing
+	 * the firmware-only STA. A queue worker must never recreate the helper
+	 * after this teardown sequence has started.
+	 */
+	if (ctx->is_initialized) {
+		qdf_spin_lock_bh(&ctx->queue_lock);
+		ctx->is_paused = true;
+		qdf_spin_unlock_bh(&ctx->queue_lock);
+		wma_flush_injection_queue(wma_handle);
 	}
 
 	if (!g_inj_tx_vdev.created)
@@ -1023,6 +1038,7 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 	uint32_t deferred_count = 0;
 	const uint32_t max_process_per_cycle = 64;
 	bool queue_was_empty;
+	bool queue_paused;
 
 	if (!wma_handle) {
 		wma_err("Invalid WMA handle");
@@ -1038,7 +1054,11 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 
 	qdf_spin_lock_bh(&ctx->queue_lock);
 	queue_was_empty = qdf_list_empty(&ctx->queue);
+	queue_paused = ctx->is_paused;
 	qdf_spin_unlock_bh(&ctx->queue_lock);
+
+	if (queue_paused)
+		return QDF_STATUS_E_AGAIN;
 
 	if (queue_was_empty)
 		return QDF_STATUS_SUCCESS;
@@ -1046,6 +1066,11 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 	/* Process frames from queue with traffic coordination */
 	while (processed_count < max_process_per_cycle) {
 		qdf_spin_lock_bh(&ctx->queue_lock);
+
+		if (ctx->is_paused) {
+			qdf_spin_unlock_bh(&ctx->queue_lock);
+			break;
+		}
 
 		if (qdf_list_empty(&ctx->queue)) {
 			qdf_spin_unlock_bh(&ctx->queue_lock);
@@ -1125,11 +1150,18 @@ static void wma_process_injection_queue_work(void *arg)
 	QDF_STATUS status;
 	uint32_t backpressure_delay;
 	bool queue_has_frames;
+	bool queue_paused;
 
 	if (!ctx->is_initialized) {
 		wma_debug("Injection queue not initialized");
 		return;
 	}
+
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	queue_paused = ctx->is_paused;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
+	if (queue_paused)
+		return;
 
 	/* Get WMA handle for processing */
 	wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
@@ -1146,7 +1178,7 @@ static void wma_process_injection_queue_work(void *arg)
 
 	/* Check if there are more frames to process */
 	qdf_spin_lock_bh(&ctx->queue_lock);
-	queue_has_frames = !qdf_list_empty(&ctx->queue);
+	queue_has_frames = !ctx->is_paused && !qdf_list_empty(&ctx->queue);
 	qdf_spin_unlock_bh(&ctx->queue_lock);
 
 	if (queue_has_frames) {
@@ -1172,11 +1204,16 @@ static void wma_process_injection_queue_work(void *arg)
 static void wma_process_injection_queue_delayed_work(void *context)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
+	bool queue_paused;
 
 	if (!ctx->is_initialized)
 		return;
 
-	qdf_sched_work(0, &ctx->queue_work);
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	queue_paused = ctx->is_paused;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
+	if (!queue_paused)
+		qdf_sched_work(0, &ctx->queue_work);
 }
 
 /**
@@ -1308,6 +1345,7 @@ QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 	/* Initialize context */
 	ctx->queue_size = 0;
 	ctx->max_queue_size = WMA_FRAME_INJECT_MAX_QUEUE_SIZE;
+	ctx->is_paused = false;
 	qdf_mem_zero(&ctx->stats, sizeof(ctx->stats));
 	qdf_atomic_init(&ctx->inflight_count);
 	ctx->is_initialized = true;
@@ -1341,6 +1379,11 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	}
 
 	wma_debug("Deinitializing WMA injection queue");
+
+	/* Stop new producers before cancelling work and tearing down the VDEV. */
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	ctx->is_paused = true;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
 
 	/*
 	 * Stop producers before tearing down the firmware-only TX vdev.
@@ -1458,8 +1501,13 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	/* Check queue overflow */
+	/* Check queue state and overflow */
 	qdf_spin_lock_bh(&ctx->queue_lock);
+
+	if (ctx->is_paused) {
+		qdf_spin_unlock_bh(&ctx->queue_lock);
+		return QDF_STATUS_E_AGAIN;
+	}
 
 	if (ctx->queue_size >= ctx->max_queue_size) {
 		queue_size = ctx->queue_size;
@@ -1505,6 +1553,11 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 	 * earlier fast-path overflow check while allocating their queue nodes.
 	 */
 	qdf_spin_lock_bh(&ctx->queue_lock);
+	if (ctx->is_paused) {
+		qdf_spin_unlock_bh(&ctx->queue_lock);
+		wma_injection_queue_node_free(node);
+		return QDF_STATUS_E_AGAIN;
+	}
 	if (ctx->queue_size >= ctx->max_queue_size) {
 		ctx->stats.queue_overflows++;
 		ctx->stats.frames_dropped++;
@@ -1629,6 +1682,7 @@ QDF_STATUS wma_flush_injection_queue(tp_wma_handle wma_handle)
 	qdf_list_node_t *list_node;
 	QDF_STATUS status;
 	uint32_t flushed_count = 0;
+	bool was_paused;
 
 	if (!wma_handle) {
 		wma_err("Invalid WMA handle");
@@ -1642,9 +1696,15 @@ QDF_STATUS wma_flush_injection_queue(tp_wma_handle wma_handle)
 
 	wma_debug("Flushing injection queue");
 
-	/* Cancel any pending work */
-	qdf_cancel_work(&ctx->queue_work);
+	/* Gate producers/work first, then wait for any active send to finish. */
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	was_paused = ctx->is_paused;
+	ctx->is_paused = true;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
+
 	qdf_delayed_work_stop_sync(&ctx->delayed_work);
+	qdf_cancel_work(&ctx->queue_work);
+	qdf_flush_work(&ctx->queue_work);
 
 	/* Flush all queued frames */
 	qdf_spin_lock_bh(&ctx->queue_lock);
@@ -1666,8 +1726,30 @@ QDF_STATUS wma_flush_injection_queue(tp_wma_handle wma_handle)
 
 	qdf_spin_unlock_bh(&ctx->queue_lock);
 
+	/* Restore the prior state; pre-stop/deinit callers keep it paused. */
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	ctx->is_paused = was_paused;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
+
 	wma_info("Flushed %u frames from injection queue", flushed_count);
 
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS wma_resume_injection_queue(tp_wma_handle wma_handle)
+{
+	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
+
+	if (!wma_handle)
+		return QDF_STATUS_E_INVAL;
+	if (!ctx->is_initialized)
+		return QDF_STATUS_E_AGAIN;
+
+	qdf_spin_lock_bh(&ctx->queue_lock);
+	ctx->is_paused = false;
+	qdf_spin_unlock_bh(&ctx->queue_lock);
+
+	wma_info("WMA injection queue resumed");
 	return QDF_STATUS_SUCCESS;
 }
 

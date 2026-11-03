@@ -154,6 +154,16 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle);
 void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle);
 
 /**
+ * wma_resume_injection_queue() - Resume frame injection after monitor enable
+ * @wma_handle: WMA handle
+ *
+ * Reopens the injection queue after the monitor VDEV has been enabled.
+ *
+ * Return: QDF_STATUS_SUCCESS on success, error code on failure
+ */
+QDF_STATUS wma_resume_injection_queue(tp_wma_handle wma_handle);
+
+/**
  * wma_queue_injection_frame() - Queue frame for injection
  * @wma_handle: WMA handle
  * @req: Frame injection request
@@ -359,6 +369,11 @@ static inline QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 
 static inline void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 {
+}
+
+static inline QDF_STATUS wma_resume_injection_queue(tp_wma_handle wma_handle)
+{
+	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,

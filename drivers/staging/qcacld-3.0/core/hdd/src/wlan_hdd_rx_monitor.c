@@ -27,6 +27,7 @@
 #include "ol_txrx.h"
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 #include "wlan_hdd_frame_inject.h"
+#include "wma_frame_inject.h"
 #endif
 
 /**
@@ -141,8 +142,13 @@ int hdd_enable_monitor_mode(struct net_device *dev)
 
 	ret = cdp_set_monitor_mode(soc, vdev_id, false);
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
-	if (!ret && adapter && QDF_IS_STATUS_ERROR(hdd_frame_inject_enable(adapter)))
-		hdd_warn("Failed to enable frame injection; monitor RX remains active");
+	if (!ret && adapter) {
+		if (QDF_IS_STATUS_ERROR(wma_resume_injection_queue(
+				cds_get_context(QDF_MODULE_ID_WMA))))
+			hdd_warn("Failed to resume WMA injection queue");
+		if (QDF_IS_STATUS_ERROR(hdd_frame_inject_enable(adapter)))
+			hdd_warn("Failed to enable frame injection; monitor RX remains active");
+	}
 #endif
 	return ret;
 }
