@@ -28,9 +28,6 @@
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 #include "wlan_hdd_frame_inject.h"
 #endif
-#ifdef FEATURE_FRAME_INJECTION_SUPPORT
-#include "wlan_hdd_frame_inject.h"
-#endif
 
 /**
  * hdd_rx_monitor_callback(): Callback function for receive monitor mode
@@ -78,18 +75,13 @@ void hdd_rx_monitor_callback(ol_osif_vdev_handle context,
 		qdf_net_buf_debug_release_skb(skb);
 
 		/*
-		 * If this is not a last packet on the chain
-		 * Just put packet into backlog queue, not scheduling RX sirq
+		 * This callback can run in NAPI/softirq context. Detach the skb
+		 * from the firmware chain and deliver inline; netif_rx_ni() can
+		 * re-enable bottom halves from softirq context.
 		 */
-		if (skb->next) {
-			rxstat = netif_rx(skb);
-		} else {
-			/*
-			 * This is the last packet on the chain
-			 * Scheduling rx sirq
-			 */
-			rxstat = netif_rx_ni(skb);
-		}
+		skb->next = NULL;
+		skb->prev = NULL;
+		rxstat = netif_receive_skb(skb);
 
 		if (NET_RX_SUCCESS == rxstat)
 			++adapter->
