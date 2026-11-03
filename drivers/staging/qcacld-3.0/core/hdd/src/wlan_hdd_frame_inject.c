@@ -71,6 +71,62 @@ static uint32_t hdd_get_next_session_id(void)
 	return qdf_atomic_inc_return(&g_injection_session_id);
 }
 
+/*
+ * Send a complete 802.11 frame through the raw LL datapath.
+ * Management frames remain on the WMA/WMI helper-STA path.
+ */
+static QDF_STATUS
+hdd_send_raw_injection_frame(void *soc_handle, uint8_t vdev_id,
+			     struct inject_frame_req *req)
+{
+	struct cdp_soc_t *soc = soc_handle;
+	qdf_nbuf_t nbuf;
+	qdf_nbuf_t rejected;
+	uint8_t *frame;
+
+	if (!soc || !req || !req->frame_data || !req->frame_len)
+		return QDF_STATUS_E_INVAL;
+
+	if (vdev_id == 0xff || vdev_id == (uint8_t)-EINVAL)
+		return QDF_STATUS_E_INVAL;
+
+	/*
+	 * cdp_tx_non_std() returns NULL on success and the unaccepted skb on
+	 * failure. Check the operation pointer first because the wrapper itself
+	 * returns NULL when the operation is unavailable.
+	 */
+	if (!soc->ops || !soc->ops->misc_ops ||
+	    !soc->ops->misc_ops->tx_non_std)
+		return QDF_STATUS_E_NOSUPPORT;
+
+	nbuf = qdf_nbuf_alloc(NULL, req->frame_len, 0, 4, GFP_KERNEL);
+	if (!nbuf)
+		return QDF_STATUS_E_NOMEM;
+
+	frame = qdf_nbuf_put_tail(nbuf, req->frame_len);
+	if (!frame) {
+		qdf_nbuf_free(nbuf);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	qdf_mem_copy(frame, req->frame_data, req->frame_len);
+	qdf_nbuf_set_next(nbuf, NULL);
+
+	/*
+	 * 0x1 RAW: frame already has its full 802.11 header.
+	 * 0x2 NO_AGGR: do not aggregate the supplied frame.
+	 * 0x4 NO_ENCRYPT: do not apply another encryption pass.
+	 */
+	rejected = cdp_tx_non_std((ol_txrx_soc_handle)soc, vdev_id,
+				  0x7, nbuf);
+	if (rejected) {
+		qdf_nbuf_free(rejected);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	return QDF_STATUS_SUCCESS;
+}
+
 /**
  * hdd_init_frame_injection() - Initialize frame injection for adapter
  * @adapter: HDD adapter
@@ -438,17 +494,12 @@ QDF_STATUS hdd_process_frame_injection(struct hdd_adapter *adapter,
 	}
 
 	/*
-	 * The validated QCACLD injection path is WMA management-TX.
-	 * Data/control frames use a different descriptor contract and are
-	 * intentionally rejected until that path is independently validated.
+	 * The validator has already accepted only Management, Control or DATA.
+	 * Select the corresponding WMA/WMI or raw CDP/HTT path in the worker.
 	 */
 	frame_type = req->frame_data[0] & 0x0c;
-	if (frame_type != 0x00) {
-		hdd_update_injection_stats(adapter, HDD_INJECTION_STAT_VALIDATION_FAILURES, 1);
-		hdd_inject_warn("Dropping non-management injection frame: fc_type=0x%02x len=%u",
-				frame_type, req->frame_len);
-		return QDF_STATUS_E_NOSUPPORT;
-	}
+	hdd_inject_debug("Validated injection frame type=0x%02x len=%u",
+			 frame_type, req->frame_len);
 
 	/* Queue frame for injection */
 	qdf_spin_lock_bh(&injection_ctx->queue_lock);
@@ -587,6 +638,7 @@ void hdd_process_injection_queue_work(void *arg)
 	struct inject_frame_req *req;
 	qdf_list_node_t *node;
 	QDF_STATUS status;
+	uint8_t frame_type = 0xff;
 	static bool queue_tx_path_logged;
 
 	if (!injection_ctx) {
@@ -608,29 +660,31 @@ void hdd_process_injection_queue_work(void *arg)
 		req = qdf_container_of(node, struct inject_frame_req, node);
 		req->process_time = qdf_get_log_timestamp();
 
+		if (!injection_ctx->wma_handle)
+			injection_ctx->wma_handle =
+				cds_get_context(QDF_MODULE_ID_WMA);
+
+		frame_type = 0xff;
 		if (!injection_ctx->adapter) {
 			status = QDF_STATUS_E_INVAL;
 			hdd_inject_err("Injection adapter is unavailable");
 		} else {
-			if (!injection_ctx->wma_handle)
-				injection_ctx->wma_handle =
-					cds_get_context(QDF_MODULE_ID_WMA);
+			uint8_t tx_vdev_id = injection_ctx->adapter->vdev_id;
+			uint8_t cdp_mon_vdev_id = 0xff;
+			uint8_t mon_adapter_vdev_id = 0xff;
+			bool mon_adapter_open = false;
+			bool monitor_mode_active = injection_ctx->is_monitor_mode;
+			struct hdd_context *hdd_ctx;
+			struct hdd_adapter *mon_adapter;
+			void *soc;
 
-			if (!injection_ctx->wma_handle) {
+			frame_type = req->frame_data ?
+				(req->frame_data[0] & 0x0c) : 0xff;
+
+			if (frame_type == 0x00 && !injection_ctx->wma_handle) {
 				status = QDF_STATUS_E_FAILURE;
 				hdd_inject_err("WMA handle unavailable for management TX");
 			} else {
-				uint8_t tx_vdev_id =
-					injection_ctx->adapter->vdev_id;
-				uint8_t cdp_mon_vdev_id = 0xff;
-				uint8_t mon_adapter_vdev_id = 0xff;
-				bool mon_adapter_open = false;
-				bool monitor_mode_active =
-					injection_ctx->is_monitor_mode;
-				struct hdd_context *hdd_ctx;
-				struct hdd_adapter *mon_adapter;
-				void *soc;
-
 				if (!monitor_mode_active) {
 					struct net_device *tx_dev =
 						injection_ctx->adapter->dev;
@@ -644,6 +698,12 @@ void hdd_process_injection_queue_work(void *arg)
 						injection_ctx->is_monitor_mode = true;
 					}
 				}
+
+				soc = cds_get_context(QDF_MODULE_ID_SOC);
+				if (soc)
+					cdp_mon_vdev_id =
+						cdp_get_mon_vdev_from_pdev(
+							soc, OL_TXRX_PDEV_ID);
 
 				if (monitor_mode_active) {
 					hdd_ctx = WLAN_HDD_GET_CTX(
@@ -659,12 +719,6 @@ void hdd_process_injection_queue_work(void *arg)
 							test_bit(DEVICE_IFACE_OPENED,
 								 &mon_adapter->event_flags);
 					}
-
-					soc = cds_get_context(QDF_MODULE_ID_SOC);
-					if (soc)
-						cdp_mon_vdev_id =
-							cdp_get_mon_vdev_from_pdev(
-								soc, OL_TXRX_PDEV_ID);
 
 					if (mon_adapter_open &&
 					    mon_adapter_vdev_id != 0xff &&
@@ -689,27 +743,41 @@ void hdd_process_injection_queue_work(void *arg)
 					queue_tx_path_logged = true;
 				}
 
-				/* Management frames follow the WMA/WMI path. */
-				status = wma_queue_injection_frame(
-					(tp_wma_handle)injection_ctx->wma_handle,
-					req, tx_vdev_id);
+				if (frame_type == 0x00) {
+					/* Management TX uses the firmware helper STA. */
+					status = wma_queue_injection_frame(
+						(tp_wma_handle)injection_ctx->wma_handle,
+						req, tx_vdev_id);
+				} else if (frame_type == 0x04 || frame_type == 0x08) {
+					/* DATA and CONTROL use raw CDP/HTT TX. */
+					status = hdd_send_raw_injection_frame(
+						soc, cdp_mon_vdev_id, req);
+				} else {
+					status = QDF_STATUS_E_INVAL;
+				}
 			}
 		}
 
 		req->complete_time = qdf_get_log_timestamp();
 		if (QDF_IS_STATUS_SUCCESS(status)) {
-			/* Queue acceptance is not firmware TX completion. */
-			hdd_inject_debug(
-				"Management frame queued to WMA: request=%u",
-				req->session_id);
+			if (frame_type == 0x00) {
+				/* Queue acceptance is not firmware TX completion. */
+				hdd_inject_debug(
+					"Management frame queued to WMA: request=%u",
+					req->session_id);
+			} else {
+				hdd_inject_debug(
+					"Raw 802.11 frame accepted by CDP/HTT: type=0x%02x request=%u",
+					frame_type, req->session_id);
+			}
 		} else {
 			if (injection_ctx->adapter)
 				hdd_update_injection_stats(
 					injection_ctx->adapter,
 					HDD_INJECTION_STAT_FRAMES_DROPPED, 1);
 			hdd_inject_err(
-				"Management TX queue rejected request=%u status=%d",
-				req->session_id, status);
+				"Frame TX path rejected request=%u type=0x%02x status=%d",
+				req->session_id, frame_type, status);
 		}
 
 		if (req->frame_data)

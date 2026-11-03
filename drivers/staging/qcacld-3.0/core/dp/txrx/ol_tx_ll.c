@@ -140,6 +140,8 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 	while (msdu) {
 		qdf_nbuf_t next;
 		struct ol_tx_desc_t *tx_desc = NULL;
+		bool use_nonstd_tx = false;
+		enum htt_pkt_type pkt_type = htt_pkt_type_raw;
 
 		msdu_info.htt.info.ext_tid = qdf_nbuf_get_tid(msdu);
 		msdu_info.peer = NULL;
@@ -164,15 +166,18 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 			} else if (tx_spec & OL_TX_SPEC_NWIFI_NO_ENCRYPT) {
 				uint8_t sub_type =
 					ol_txrx_tx_raw_subtype(tx_spec);
+				pkt_type = htt_pkt_type_native_wifi;
+				use_nonstd_tx = true;
 				htt_tx_desc_type(htt_pdev, tx_desc->htt_tx_desc,
-						 htt_pkt_type_native_wifi,
-						 sub_type);
+						 pkt_type, sub_type);
 			} else if (ol_txrx_tx_is_raw(tx_spec)) {
-				/* different types of raw frames */
+				/* Complete 802.11 frames use the HTT non-standard sender. */
 				uint8_t sub_type =
 					ol_txrx_tx_raw_subtype(tx_spec);
+				pkt_type = htt_pkt_type_raw;
+				use_nonstd_tx = true;
 				htt_tx_desc_type(htt_pdev, tx_desc->htt_tx_desc,
-						 htt_pkt_type_raw, sub_type);
+						 pkt_type, sub_type);
 			}
 		}
 		/*
@@ -180,7 +185,10 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 		 * downloaded to the target via the HTT tx descriptor.
 		 */
 		htt_tx_desc_display(tx_desc->htt_tx_desc);
-		ol_tx_send(vdev->pdev, tx_desc, msdu, vdev->vdev_id);
+		if (use_nonstd_tx)
+			ol_tx_send_nonstd(vdev->pdev, tx_desc, msdu, pkt_type);
+		else
+			ol_tx_send(vdev->pdev, tx_desc, msdu, vdev->vdev_id);
 		msdu = next;
 	}
 	return NULL;            /* all MSDUs were accepted */
