@@ -64,6 +64,9 @@ jobs:
             grep -E '^(CONFIG_(DEBUG_FS|DYNAMIC_DEBUG|PRINTK_TIME|LOG_BUF_SHIFT|IKCONFIG_PROC|QCA_CLD_WLAN|QCA_CLD_WLAN_PROFILE))=' out/.config
             echo "=== QCA6390 DRIVER PROFILE ==="
             grep -nE '^(CONFIG_FEATURE_FRAME_INJECTION_SUPPORT|CONFIG_FEATURE_MONITOR_MODE_SUPPORT|CONFIG_WLAN_LOG_(FATAL|ERROR|WARN|INFO|DEBUG|ENTER|EXIT)|BUILD_DEBUG_VERSION) *[:=]' drivers/staging/qcacld-3.0/configs/qca6390_defconfig
+            echo "=== QDF RUNTIME TRACE POLICY ==="
+            grep -n "QDF trace: temporary DEBUG verbosity enabled" drivers/staging/qca-wifi-host-cmn/qdf/linux/src/qdf_trace.c
+            sha256sum drivers/staging/qca-wifi-host-cmn/qdf/linux/src/qdf_trace.c
             echo "=== DRIVER COMPILE FLAGS ==="
             find out/drivers/staging/qcacld-3.0 -type f -name '.*.cmd' -print0 |
               xargs -0 grep -hEo -- '-DFEATURE_FRAME_INJECTION_SUPPORT|-DWLAN_LOG_(FATAL|ERROR|WARN|INFO|DEBUG|ENTER|EXIT)|-DWLAN_DEBUG' |

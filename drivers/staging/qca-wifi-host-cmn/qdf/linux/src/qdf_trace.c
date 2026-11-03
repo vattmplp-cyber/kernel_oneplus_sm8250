@@ -3635,6 +3635,14 @@ static void set_default_trace_levels(struct category_info *cinfo)
 		cinfo[i].category_verbose_mask = set_cumulative_verbose_mask(
 				module_trace_default_level[i]);
 	}
+
+	/* TEMPORARY DEVELOPMENT MODE: enable every QDF module through DEBUG. */
+	for (i = 0; i < MAX_SUPPORTED_CATEGORY; i++)
+		cinfo[i].category_verbose_mask =
+			set_cumulative_verbose_mask(QDF_TRACE_LEVEL_DEBUG);
+
+	pr_info("QDF trace: temporary DEBUG verbosity enabled for all %d modules\\n",
+		MAX_SUPPORTED_CATEGORY);
 }
 
 void qdf_shared_print_ctrl_init(void)
