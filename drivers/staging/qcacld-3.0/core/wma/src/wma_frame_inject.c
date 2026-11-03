@@ -164,6 +164,9 @@ static bool inject_patch_banner_logged;
 #define WMA_INJECTION_DEBUG_CACHE_SIZE 256
 struct wma_injection_debug_info {
 	bool valid;
+	bool submit_pending;
+	bool completion_pending;
+	uint32_t completion_status;
 	uint32_t desc_id;
 	uint16_t frame_len;
 	uint16_t chanfreq;
@@ -640,6 +643,8 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	qdf_nbuf_t stale_buf = NULL;
 	uint32_t stale_desc_id = 0;
 	uint32_t slot;
+	uint64_t now_ts;
+	uint64_t age_us;
 
 	if (!desc_id || !req || !req->frame_data)
 		return;
@@ -650,10 +655,22 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry = &g_wma_injection_debug_cache[slot];
 
 	/*
-	 * If this slot was previously used for a different desc_id whose
-	 * completion never arrived, detach its buffer while holding the lock.
+	 * Do not recycle a cache slot while its previous send call is still
+	 * submitting, or while its accepted TX buffer is younger than the
+	 * reaper timeout. Reject this request rather than freeing a buffer
+	 * that firmware may still be reading.
 	 */
-	if (entry->valid && entry->tx_buf && entry->desc_id != desc_id) {
+	if (entry->valid && entry->desc_id != desc_id && entry->tx_buf) {
+		now_ts = qdf_get_log_timestamp();
+		age_us = entry->submit_ts ?
+			qdf_log_timestamp_to_usecs(now_ts - entry->submit_ts) : 0;
+		if (entry->submit_pending || !entry->submit_ts ||
+		    age_us < WMA_INJECTION_NBUF_TIMEOUT_US) {
+			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+			wma_warn("Injection: debug cache slot %u busy with desc_id=%u; rejecting desc_id=%u",
+				 slot, entry->desc_id, desc_id);
+			return;
+		}
 		stale_desc_id = entry->desc_id;
 		stale_buf = entry->tx_buf;
 		entry->tx_buf = NULL;
@@ -661,13 +678,16 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	}
 
 	entry->valid = false;
+	entry->submit_pending = false;
+	entry->completion_pending = false;
+	entry->completion_status = 0;
 	entry->desc_id = desc_id;
 	entry->frame_len = req->frame_len;
 	entry->chanfreq = chanfreq;
 	entry->fc_type = fc_type;
 	entry->fc_subtype = fc_subtype;
 	entry->tx_buf = NULL;
-	entry->submit_ts = qdf_get_log_timestamp();
+	entry->submit_ts = 0;
 	qdf_mem_zero(entry->addr1, sizeof(entry->addr1));
 	qdf_mem_zero(entry->addr2, sizeof(entry->addr2));
 	qdf_mem_zero(entry->addr3, sizeof(entry->addr3));
@@ -690,13 +710,15 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 }
 
 /*
- * Claim a completion entry atomically.  The caller owns snapshot->tx_buf
- * after success; the cache is invalidated before the lock is released so
- * the reaper cannot free the same buffer.
+ * Claim an entry under the cache lock. If completion races with the WMI
+ * submit call, record it and defer buffer release until the submitter has
+ * returned and no longer owns the call stack.
  */
 static bool
 wma_injection_debug_cache_get(uint32_t desc_id,
-			      struct wma_injection_debug_info *snapshot)
+			      struct wma_injection_debug_info *snapshot,
+			      bool defer_if_submitting,
+			      uint32_t completion_status)
 {
 	struct wma_injection_debug_info *entry;
 	uint32_t slot;
@@ -711,10 +733,18 @@ wma_injection_debug_cache_get(uint32_t desc_id,
 	entry = &g_wma_injection_debug_cache[slot];
 	if (entry->valid && entry->desc_id == desc_id) {
 		*snapshot = *entry;
-		entry->tx_buf = NULL;
-		entry->valid = false;
-		if (snapshot->tx_buf)
-			qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		if (defer_if_submitting && entry->submit_pending) {
+			entry->completion_pending = true;
+			entry->completion_status = completion_status;
+			/* The submitter retains ownership until WMI returns. */
+			snapshot->tx_buf = NULL;
+		} else {
+			entry->tx_buf = NULL;
+			entry->valid = false;
+			entry->submit_pending = false;
+			if (snapshot->tx_buf)
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+		}
 		found = true;
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
@@ -723,11 +753,9 @@ wma_injection_debug_cache_get(uint32_t desc_id,
 }
 
 /*
- * Attach the DMA buffer to its completion-cache entry BEFORE submitting
- * the WMI command. Firmware completion can be delivered very quickly after
- * submission; publishing tx_buf only after wmi_mgmt_unified_cmd_send()
- * returns leaves a window where completion invalidates an entry with no
- * buffer, leaking the DMA mapping.
+ * Attach before WMI submission, but protect the buffer from the reaper until
+ * the send call returns. An early completion only marks the entry; this
+ * submit-done helper then takes ownership of the buffer.
  */
 static bool
 wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
@@ -745,8 +773,50 @@ wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
 	entry = &g_wma_injection_debug_cache[slot];
 	if (entry->valid && entry->desc_id == desc_id && !entry->tx_buf) {
 		entry->tx_buf = tx_buf;
-		entry->submit_ts = qdf_get_log_timestamp();
+		entry->submit_pending = true;
+		entry->completion_pending = false;
+		entry->completion_status = 0;
+		entry->submit_ts = 0;
 		qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
+		found = true;
+	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	return found;
+}
+
+static bool
+wma_injection_debug_cache_submit_done(
+		uint32_t desc_id,
+		struct wma_injection_debug_info *snapshot,
+		bool *completion_received)
+{
+	struct wma_injection_debug_info *entry;
+	uint32_t slot;
+	bool found = false;
+
+	if (!desc_id || !snapshot || !completion_received)
+		return false;
+
+	*completion_received = false;
+	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
+
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	entry = &g_wma_injection_debug_cache[slot];
+	if (entry->valid && entry->desc_id == desc_id &&
+	    entry->submit_pending) {
+		if (entry->completion_pending) {
+			*snapshot = *entry;
+			entry->tx_buf = NULL;
+			entry->valid = false;
+			entry->submit_pending = false;
+			if (snapshot->tx_buf)
+				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+			*completion_received = true;
+		} else {
+			entry->submit_pending = false;
+			entry->submit_ts = qdf_get_log_timestamp();
+		}
 		found = true;
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
@@ -1147,7 +1217,8 @@ static void wma_injection_reaper_work_cb(void *context)
 		 */
 		qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 		e = &g_wma_injection_debug_cache[i];
-		if (e->valid && e->tx_buf && e->submit_ts) {
+		if (e->valid && e->tx_buf && e->submit_ts &&
+		    !e->submit_pending) {
 			/* Timestamp delta is converted from QTI log ticks to usecs. */
 			age_us = qdf_log_timestamp_to_usecs(now_ts - e->submit_ts);
 			if (age_us >= WMA_INJECTION_NBUF_TIMEOUT_US) {
@@ -1621,6 +1692,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	bool wmi_tx_ok = false;
 	struct wma_injection_debug_info failed_tx_snapshot;
 	bool have_failed_tx_snapshot;
+	bool completion_received;
 	bool is_probe_req = false;
 	bool monitor_vdev = false;
 
@@ -1877,7 +1949,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		wma_err("Injection: cannot attach TX buffer to cache for desc_id=%u",
 			mgmt_params.desc_id);
 		wma_injection_debug_cache_get(mgmt_params.desc_id,
-					      &failed_tx_snapshot);
+					      &failed_tx_snapshot, false, 0);
 		qdf_nbuf_free(wmi_buf);
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -1886,6 +1958,15 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
 	if (!QDF_IS_STATUS_ERROR(status)) {
 		wmi_tx_ok = true;
+		if (!wma_injection_debug_cache_submit_done(
+				mgmt_params.desc_id, &failed_tx_snapshot,
+				&completion_received)) {
+			wma_err("Injection: cache entry disappeared before WMI submit completed (desc_id=%u)",
+				mgmt_params.desc_id);
+		} else if (completion_received && failed_tx_snapshot.tx_buf) {
+			wma_injection_unmap_tx_buf(failed_tx_snapshot.tx_buf);
+			qdf_nbuf_free(failed_tx_snapshot.tx_buf);
+		}
 	} else {
 		wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
 			 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
@@ -1899,13 +1980,25 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		 */
 		have_failed_tx_snapshot =
 			wma_injection_debug_cache_get(mgmt_params.desc_id,
-					      &failed_tx_snapshot);
+					      &failed_tx_snapshot, false, 0);
 		if (!have_failed_tx_snapshot || !failed_tx_snapshot.tx_buf) {
 			wma_err("Injection: failed WMI submit has no cache-owned buffer (desc_id=%u); skip fallback",
 				mgmt_params.desc_id);
 			return status;
 		}
 		wmi_buf = failed_tx_snapshot.tx_buf;
+
+		if (failed_tx_snapshot.completion_pending) {
+			/*
+			 * A completion arrived while the WMI submit call was still
+			 * returning. It owns the result; do not retry the frame.
+			 */
+			wma_injection_unmap_tx_buf(wmi_buf);
+			qdf_nbuf_free(wmi_buf);
+			return failed_tx_snapshot.completion_status ==
+				WMI_MGMT_TX_COMP_TYPE_COMPLETE_OK ?
+				QDF_STATUS_SUCCESS : status;
+		}
 
 		if (monitor_vdev) {
 			wma_warn("Injection monitor vdev: WMI TX failed (%d); dropping frame to avoid legacy firmware assert",
@@ -2020,7 +2113,8 @@ QDF_STATUS wma_handle_injection_fw_response(tp_wma_handle wma_handle,
 	 * Claim and invalidate the cache entry under the shared cache lock.
 	 * After the helper returns, the local snapshot exclusively owns tx_buf.
 	 */
-	have_dbg_entry = wma_injection_debug_cache_get(desc_id, &dbg_snapshot);
+	have_dbg_entry = wma_injection_debug_cache_get(desc_id, &dbg_snapshot,
+						      true, status);
 	if (have_dbg_entry) {
 		/*
 		 * Log the first few completions for each status category
