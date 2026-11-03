@@ -3631,10 +3631,19 @@ static void set_default_trace_levels(struct category_info *cinfo)
 		[QDF_MODULE_ID_GPIO] = QDF_TRACE_LEVEL_NONE,
 	};
 
+	/* Diagnostic kernel: retain every QDF module and every trace level.
+	 * This is intentionally gated by QDF_TRACE_PRINT_ENABLE so normal
+	 * non-diagnostic builds keep their production verbosity defaults.
+	 */
+#ifdef QDF_TRACE_PRINT_ENABLE
+	for (i = 0; i < MAX_SUPPORTED_CATEGORY; i++)
+		cinfo[i].category_verbose_mask = 0xFFFF;
+#else
 	for (i = 0; i < MAX_SUPPORTED_CATEGORY; i++) {
 		cinfo[i].category_verbose_mask = set_cumulative_verbose_mask(
 				module_trace_default_level[i]);
 	}
+#endif
 }
 
 void qdf_shared_print_ctrl_init(void)
