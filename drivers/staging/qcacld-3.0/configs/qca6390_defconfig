@@ -381,7 +381,7 @@ endif
 # Feature flags which are not (currently) configurable via Kconfig
 
 #Whether to build debug version
-BUILD_DEBUG_VERSION := n # Keep QDF trace compile path compatible; kernel dynamic_debug captures pr_debug/dev_dbg
+BUILD_DEBUG_VERSION := y # Enable WLAN_DEBUG and full QDF tracing for diagnostic build
 
 #Enable this flag to build driver in diag version
 BUILD_DIAG_VERSION := n
