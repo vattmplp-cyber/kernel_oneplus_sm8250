@@ -38,17 +38,62 @@ jobs:
           
           echo "=== 2. Оновлення конфігурації під поточне ядро ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
-          
+
+          echo "=== Verify diagnostic kernel configuration ==="
+          grep -qx 'CONFIG_DEBUG_FS=y' out/.config
+          grep -qx 'CONFIG_DYNAMIC_DEBUG=y' out/.config
+          grep -qx 'CONFIG_PRINTK_TIME=y' out/.config
+          grep -qx 'CONFIG_LOG_BUF_SHIFT=20' out/.config
+
           echo "=== Qualcomm qcacld compile check ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/staging/qcacld-3.0/
 
           echo "=== 3. Повна збірка всього іншого ядра ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
+      - name: Save Build Identity and Diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/debug-manifest/qcacld-commands
+          {
+            echo "=== SOURCE ==="
+            git rev-parse HEAD
+            git log -1 --format='%H%n%ci%n%s'
+            echo "=== KERNEL CONFIG ==="
+            grep -E '^(CONFIG_(DEBUG_FS|DYNAMIC_DEBUG|PRINTK_TIME|LOG_BUF_SHIFT|IKCONFIG_PROC|QCA_CLD_WLAN|QCA_CLD_WLAN_PROFILE))=' out/.config
+            echo "=== QCA6390 DRIVER PROFILE ==="
+            grep -nE '^(CONFIG_FEATURE_FRAME_INJECTION_SUPPORT|CONFIG_FEATURE_MONITOR_MODE_SUPPORT|CONFIG_WLAN_LOG_(FATAL|ERROR|WARN|INFO|DEBUG|ENTER|EXIT)|BUILD_DEBUG_VERSION) *[:=]' drivers/staging/qcacld-3.0/configs/qca6390_defconfig
+            echo "=== DRIVER COMPILE FLAGS ==="
+            find out/drivers/staging/qcacld-3.0 -type f -name '.*.cmd' -print0 |
+              xargs -0 grep -hEo -- '-DFEATURE_FRAME_INJECTION_SUPPORT|-DWLAN_LOG_(FATAL|ERROR|WARN|INFO|DEBUG|ENTER|EXIT)|-DWLAN_DEBUG' |
+              sort -u
+            echo "=== IMAGE HASHES ==="
+            sha256sum out/arch/arm64/boot/Image out/arch/arm64/boot/Image.gz
+          } > out/debug-manifest/build-identity.txt
+
+          find out/drivers/staging/qcacld-3.0 -type f -name '.*.cmd' -print0 |
+            while IFS= read -r -d '' f; do
+              if grep -Eq -- 'FEATURE_FRAME_INJECTION_SUPPORT|DWLAN_LOG_(FATAL|ERROR|WARN|INFO|DEBUG|ENTER|EXIT)' "$f"; then
+                cp "$f" "out/debug-manifest/qcacld-commands/$(basename "$(dirname "$f")")_$(basename "$f")"
+              fi
+            done
+
+          strings out/vmlinux |
+            grep -E 'Frame injection initialized successfully|Processing frame injection|Injection:|Injection TX' |
+            sort -u > out/debug-manifest/injection-strings.txt
+
+          grep -q 'Frame injection initialized successfully' out/debug-manifest/injection-strings.txt
+          grep -q -- '-DFEATURE_FRAME_INJECTION_SUPPORT' out/debug-manifest/build-identity.txt
+          grep -q -- '-DWLAN_LOG_DEBUG' out/debug-manifest/build-identity.txt
+
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Meteoric-Kebab-Stable
+          name: Meteoric-Kebab-DIAGNOSTIC
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
+            out/.config
+            out/System.map
+            out/debug-manifest/**
