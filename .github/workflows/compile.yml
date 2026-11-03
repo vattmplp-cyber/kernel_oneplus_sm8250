@@ -52,6 +52,61 @@ jobs:
           echo "=== 3. Повна збірка всього іншого ядра ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
+          echo "=== Verify embedded IKCONFIG matches the actual build config ==="
+          python3 - <<'PY'
+          import gzip
+          import re
+          from pathlib import Path
+
+          image_path = Path("out/arch/arm64/boot/Image")
+          config_path = Path("out/.config")
+          image = image_path.read_bytes()
+          start = image.find(b"IKCFG_ST")
+          end = image.find(b"IKCFG_ED", start + 8) if start >= 0 else -1
+          if start < 0 or end < 0:
+              raise SystemExit("ERROR: IKCONFIG markers missing from built Image")
+          try:
+              embedded = gzip.decompress(image[start + 8:end]).decode()
+          except Exception as exc:
+              raise SystemExit(f"ERROR: cannot decompress embedded IKCONFIG: {exc}")
+
+          def parse_config(text):
+              values = {}
+              for line in text.splitlines():
+                  if line.startswith("CONFIG_") and "=" in line:
+                      key, value = line.split("=", 1)
+                      values[key] = value
+                  else:
+                      match = re.fullmatch(r"# (CONFIG_[A-Za-z0-9_]+) is not set", line)
+                      if match:
+                          values[match.group(1)] = "n"
+              return values
+
+          built = parse_config(config_path.read_text())
+          embedded_values = parse_config(embedded)
+          differences = []
+          for key in sorted(set(built) | set(embedded_values)):
+              if built.get(key) != embedded_values.get(key):
+                  differences.append((key, built.get(key, "<missing>"), embedded_values.get(key, "<missing>")))
+          if differences:
+              for key, expected, actual in differences[:100]:
+                  print(f"MISMATCH {key}: build={expected}, embedded={actual}")
+              raise SystemExit(f"ERROR: embedded IKCONFIG differs from out/.config ({len(differences)} entries)")
+          required = {
+              "CONFIG_IKCONFIG_PROC": "y",
+              "CONFIG_DEBUG_FS": "y",
+              "CONFIG_DYNAMIC_DEBUG": "y",
+              "CONFIG_PRINTK_TIME": "y",
+              "CONFIG_LOG_BUF_SHIFT": "20",
+          }
+          for key, expected in required.items():
+              actual = embedded_values.get(key)
+              print(f"{key}={actual}")
+              if actual != expected:
+                  raise SystemExit(f"ERROR: {key}: expected {expected}, got {actual}")
+          print("PASS: embedded IKCONFIG exactly matches out/.config")
+          PY
+
       # This step is diagnostic only. Missing optional strings/flags must never
       # prevent the kernel image and diagnostic files from being uploaded.
       - name: Save Build Identity and Diagnostics
@@ -62,6 +117,7 @@ jobs:
           mkdir -p out/debug-manifest/qcacld-commands
           MANIFEST=out/debug-manifest/build-identity.txt
           : > "$MANIFEST"
+          if [ -f out/.config ]; then cp out/.config out/debug-manifest/kernel.config; fi
 
           {
             echo "=== BUILD STEP RESULT ==="
