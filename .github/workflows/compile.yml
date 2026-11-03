@@ -29,72 +29,42 @@ jobs:
         run: |
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          
+
           set -euo pipefail
           echo "=== Source revision ==="
           git rev-parse HEAD
-          echo "=== 1. Створення базової конфігурації ==="
+          echo "=== 1. Create Meteoric configuration ==="
           make O=out vendor/meteoric_defconfig
-          
-          echo "=== 2. Оновлення конфігурації під поточне ядро ==="
+
+          echo "=== 2. Resolve configuration ==="
           make O=out ARCH=arm64 CC=clang olddefconfig
-          
+
+          echo "=== Verify required diagnostic options ==="
+          grep -q '^CONFIG_DEBUG_KERNEL=y$' out/.config
+          grep -q '^CONFIG_DEBUG_FS=y$' out/.config
+          grep -q '^CONFIG_DYNAMIC_DEBUG=y$' out/.config
+          grep -q '^CONFIG_PRINTK_TIME=y$' out/.config
+
           echo "=== Qualcomm qcacld compile check ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/staging/qcacld-3.0/
 
-          echo "=== 3. Повна збірка всього іншого ядра ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-
-          echo "=== 4. Verify diagnostic config and save build identity ==="
-          grep -q '^CONFIG_DEBUG_KERNEL=y
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-Stable
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/diagnostics/meteoric-final.config
-            out/diagnostics/BUILD-INFO.txt
- out/.config
-          grep -q '^CONFIG_DEBUG_FS=y
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-Stable
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
- out/.config
-          grep -q '^CONFIG_DYNAMIC_DEBUG=y
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-Stable
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
- out/.config
-          grep -q '^CONFIG_PRINTK_TIME=y
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-Stable
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
- out/.config
+          echo "=== Verify frame-injection objects were compiled ==="
           test -f out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o
           test -f out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o
+
+          echo "=== 3. Full kernel build ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+          echo "=== 4. Save final config and build identity ==="
           mkdir -p out/diagnostics
           cp out/.config out/diagnostics/meteoric-final.config
           {
             echo "source_commit=$(git rev-parse HEAD)"
             echo "source_branch=${GITHUB_REF_NAME:-unknown}"
             echo "kernel_release=$(make -s O=out ARCH=arm64 kernelrelease)"
-            echo "config_sha256=$(sha256sum out/.config | awk '{print \$1}')"
+            echo "config_sha256=$(sha256sum out/.config | cut -d' ' -f1)"
             echo "frame_injection_objects:"
-            find out/drivers/staging/qcacld-3.0 -type f \\( -name 'wlan_hdd_frame_inject.o' -o -name 'wlan_hdd_frame_validate.o' -o -name 'wma_frame_inject.o' \\) -print | sort
+            find out/drivers/staging/qcacld-3.0 -type f \( -name 'wlan_hdd_frame_inject.o' -o -name 'wlan_hdd_frame_validate.o' -o -name 'wma_frame_inject.o' \) -print | sort
             echo "effective_debug_config:"
             grep -E '^(CONFIG_(DEBUG_KERNEL|DEBUG_FS|DYNAMIC_DEBUG|PRINTK_TIME|LOG_BUF_SHIFT|QCA_CLD_WLAN|IKCONFIG_PROC)=|# CONFIG_(DEBUG_KERNEL|DEBUG_FS|DYNAMIC_DEBUG) is not set)' out/.config || true
             echo "image_sha256:"
@@ -109,3 +79,5 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
+            out/diagnostics/meteoric-final.config
+            out/diagnostics/BUILD-INFO.txt
