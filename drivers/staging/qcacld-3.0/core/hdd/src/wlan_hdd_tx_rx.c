@@ -944,6 +944,10 @@ static bool hdd_is_monitor_tx_dev(struct hdd_adapter *adapter,
 	if (!adapter || !dev)
 		return false;
 
+	/* con_mode=4 switches the whole driver into global monitor operation. */
+	if (cds_get_conparam() == QDF_GLOBAL_MONITOR_MODE)
+		return true;
+
 	if (adapter->device_mode == QDF_MONITOR_MODE)
 		return true;
 
@@ -1428,12 +1432,41 @@ drop_pkt_accounting:
 netdev_tx_t hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 {
 	struct osif_vdev_sync *vdev_sync;
+	int ret;
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	struct hdd_adapter *adapter =
+		net_dev ? WLAN_HDD_GET_PRIV_PTR(net_dev) : NULL;
+	bool monitor_tx = hdd_is_monitor_tx_dev(adapter, net_dev);
+	static bool monitor_xmit_enter_logged;
+#endif
 
-	if (osif_vdev_sync_op_start(net_dev, &vdev_sync)) {
-		hdd_debug_rl("Operation on net_dev is not permitted");
+	ret = osif_vdev_sync_op_start(net_dev, &vdev_sync);
+	if (ret) {
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+		if (monitor_tx)
+			hdd_warn_rl("monitor ndo_start_xmit blocked by osif sync: if=%s mode=%d iftype=%d dev_type=%u rc=%d",
+				    net_dev ? net_dev->name : "null",
+				    adapter ? adapter->device_mode : -1,
+				    (net_dev && net_dev->ieee80211_ptr) ?
+					    net_dev->ieee80211_ptr->iftype : -1,
+				    net_dev ? net_dev->type : 0, ret);
+		else
+#endif
+			hdd_debug_rl("Operation on net_dev is not permitted: rc=%d", ret);
 		kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}
+
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	if (monitor_tx && !monitor_xmit_enter_logged) {
+		hdd_warn("monitor ndo_start_xmit reached: if=%s mode=%d iftype=%d dev_type=%u len=%u",
+			 net_dev->name, adapter->device_mode,
+			 net_dev->ieee80211_ptr ?
+				 net_dev->ieee80211_ptr->iftype : -1,
+			 net_dev->type, skb ? skb->len : 0);
+		monitor_xmit_enter_logged = true;
+	}
+#endif
 
 	__hdd_hard_start_xmit(skb, net_dev);
 

@@ -437,11 +437,11 @@ QDF_STATUS hdd_process_frame_injection(struct hdd_adapter *adapter,
 		return status;
 	}
 
-	/* Management frames use WMI management-TX; data/control use raw DP TX. */
+	/* The WMA injection backend currently supports management frames. */
 	frame_type = req->frame_data[0] & 0x0c;
-	if (frame_type != 0x00 && frame_type != 0x04 && frame_type != 0x08) {
+	if (frame_type != 0x00) {
 		hdd_update_injection_stats(adapter, HDD_INJECTION_STAT_VALIDATION_FAILURES, 1);
-		hdd_inject_warn("Dropping unsupported frame-control type: fc_type=0x%02x len=%u",
+		hdd_inject_warn("Dropping non-management injection frame: fc_type=0x%02x len=%u",
 				frame_type, req->frame_len);
 		return QDF_STATUS_E_NOSUPPORT;
 	}
@@ -571,56 +571,6 @@ int hdd_frame_inject_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 }
 
 /**
- * hdd_send_raw_frame_via_dp() - Send an 802.11 data/control frame through DP.
- * @req: Validated injection request.
- * @vdev_id: Active monitor vdev ID.
- *
- * The CDP non-standard TX path accepts native 802.11 MSDUs and sets the HTT
- * raw-frame descriptor flags. Management frames stay on WMA's management-TX
- * path because they need management completion handling.
- *
- * Return: QDF_STATUS_SUCCESS if DP accepts the frame, otherwise an error.
- */
-static QDF_STATUS
-hdd_send_raw_frame_via_dp(struct inject_frame_req *req, uint8_t vdev_id)
-{
-	void *soc;
-	qdf_nbuf_t nbuf;
-	qdf_nbuf_t rejected;
-	uint8_t *dst;
-
-	if (!req || !req->frame_data || !req->frame_len)
-		return QDF_STATUS_E_INVAL;
-
-	soc = cds_get_context(QDF_MODULE_ID_SOC);
-	if (!soc)
-		return QDF_STATUS_E_INVAL;
-
-	nbuf = qdf_nbuf_alloc(NULL, req->frame_len, 0, 0, false);
-	if (!nbuf)
-		return QDF_STATUS_E_NOMEM;
-
-	dst = qdf_nbuf_put_tail(nbuf, req->frame_len);
-	if (!dst) {
-		qdf_nbuf_free(nbuf);
-		return QDF_STATUS_E_NOMEM;
-	}
-	qdf_mem_copy(dst, req->frame_data, req->frame_len);
-
-	qdf_net_buf_debug_acquire_skb((struct sk_buff *)nbuf, __FILE__, __LINE__);
-	rejected = cdp_tx_non_std(soc, vdev_id,
-				  OL_TX_SPEC_RAW | OL_TX_SPEC_NO_AGGR |
-				  OL_TX_SPEC_NO_ENCRYPT, nbuf);
-	if (rejected) {
-		qdf_net_buf_debug_release_skb((struct sk_buff *)rejected);
-		qdf_nbuf_free(rejected);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	return QDF_STATUS_SUCCESS;
-}
-
-/**
  * hdd_process_injection_queue_work() - Work function to process injection queue
  * @arg: Work argument (injection context)
  *
@@ -657,8 +607,7 @@ void hdd_process_injection_queue_work(void *arg)
 		req->process_time = qdf_get_log_timestamp();
 
 			/* Send frame to WMA layer for transmission */
-			if (injection_ctx->wma_handle ||
-			    ((req->frame_data[0] & 0x0c) != 0x00)) {
+			if (injection_ctx->wma_handle) {
 				uint8_t tx_vdev_id = injection_ctx->adapter->vdev_id;
 				uint8_t cdp_mon_vdev_id = 0xff;
 				uint8_t mon_adapter_vdev_id = 0xff;
@@ -729,39 +678,18 @@ void hdd_process_injection_queue_work(void *arg)
 
 			{
 			QDF_STATUS wma_status;
-			uint64_t total_latency;
 
-			if ((req->frame_data[0] & 0x0c) == 0x00) {
-				wma_status = wma_queue_injection_frame(
-					(tp_wma_handle)injection_ctx->wma_handle,
-					req, tx_vdev_id);
-			} else {
-				wma_status = hdd_send_raw_frame_via_dp(req,
-								      tx_vdev_id);
-			}
+			wma_status = wma_queue_injection_frame(
+				(tp_wma_handle)injection_ctx->wma_handle, req,
+				tx_vdev_id);
 			
 			/* Update timing for completion */
 			req->complete_time = qdf_get_log_timestamp();
 
 			if (QDF_IS_STATUS_SUCCESS(wma_status)) {
-				/*
-				 * DP raw-TX acceptance is the only completion signal available
-				 * here for data/control frames. Management frames are counted
-				 * from WMA firmware completion stats, not when merely queued.
-				 */
-				if ((req->frame_data[0] & 0x0c) != 0x00) {
-					hdd_update_injection_stats(injection_ctx->adapter,
-								  HDD_INJECTION_STAT_FRAMES_TRANSMITTED,
-								  1);
-					total_latency = req->complete_time - req->submit_time;
-					hdd_update_injection_latency(injection_ctx->adapter,
-								    total_latency);
-					hdd_inject_debug("Raw frame accepted by TX backend: request=%u, latency=%llu us",
-							 req->session_id, total_latency);
-				} else {
-					hdd_inject_debug("Management frame queued to WMA: request=%u",
-							 req->session_id);
-				}
+				/* Queue acceptance is not an air-transmission completion. */
+				hdd_inject_debug("Management frame queued to WMA: request=%u",
+						 req->session_id);
 			} else {
 				hdd_update_injection_stats(injection_ctx->adapter, HDD_INJECTION_STAT_FRAMES_DROPPED, 1);
 				hdd_inject_err("TX backend rejected injected frame: %d", wma_status);
