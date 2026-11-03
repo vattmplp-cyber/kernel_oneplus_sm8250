@@ -1680,6 +1680,7 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	bool wmi_tx_ok = false;
 	bool is_probe_req = false;
 	bool monitor_vdev = false;
+	bool use_direct_cdp = false;
 
 	if (!wma_handle || !req || !req->frame_data) {
 		wma_err("Invalid parameters: wma_handle=%pK, req=%pK",
@@ -1874,20 +1875,25 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 
 	wmi_mgmt_service = wmi_service_enabled(wma_handle->wmi_handle,
 					       wmi_service_mgmt_tx_wmi);
-	if (monitor_vdev && !wmi_mgmt_service &&
-	    !inject_wmi_service_absent_logged) {
-		wma_warn("Injection monitor vdev: mgmt_tx_wmi service bit is 0, "
-			 "but WMI TX will still be attempted via hidden STA vdev");
-		inject_wmi_service_absent_logged = true;
+	/*
+	 * A successful host-side WMI enqueue is not proof that firmware can
+	 * transmit the frame. This target does not advertise mgmt_tx_wmi, so
+	 * choose the host CDP path directly instead of relying on a hidden STA
+	 * VDEV and a WMI completion path the firmware did not advertise.
+	 */
+	if (monitor_vdev && !wmi_mgmt_service) {
+		use_direct_cdp = true;
+		if (!inject_wmi_service_absent_logged) {
+			wma_warn("Injection monitor vdev: mgmt_tx_wmi is not advertised; selecting direct CDP Data Path");
+			inject_wmi_service_absent_logged = true;
+		}
 	}
 
-
-
-	if (monitor_vdev) {
+	if (monitor_vdev && !use_direct_cdp) {
 		/*
 		 * FW _wlan_send_mgmt_to_host rejects MONITOR vdevs (falls
-		 * to a beacon-only path → DISCARD).  Route through a hidden
-		 * AP vdev instead, which the FW accepts for mgmt TX.
+		 * to a beacon-only path -> DISCARD). When WMI mgmt-TX is
+		 * advertised, use the helper STA VDEV for WMI submissions.
 		 */
 		status = wma_injection_ensure_tx_vdev(wma_handle,
 						     vdev_id, tx_chanfreq);
@@ -1899,63 +1905,54 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		}
 		mgmt_params.vdev_id = g_inj_tx_vdev.vdev_id;
 		if (!inject_monitor_no_legacy_logged) {
-			wma_warn("Injection monitor: using hidden AP vdev %u for TX (monitor vdev %u)",
+			wma_warn("Injection monitor: using hidden STA vdev %u for WMI TX (monitor vdev %u)",
 				 g_inj_tx_vdev.vdev_id, vdev_id);
 			inject_monitor_no_legacy_logged = true;
 		}
 	}
 
-	/*
-	 * Reserve the cache slot only after all setup that can fail before WMI
-	 * submission (including helper-vdev creation). The cache now owns the
-	 * buffer while submit_pending is true, so a racing completion can defer
-	 * release until wmi_mgmt_unified_cmd_send() returns.
-	 */
-	if (!wma_injection_debug_cache_update(mgmt_params.desc_id, req,
-					      fc_type, fc_subtype,
-					      mgmt_params.chanfreq, wmi_buf)) {
-		wma_err("Injection: unable to reserve debug-cache slot for desc_id=%u",
-			mgmt_params.desc_id);
-		qdf_nbuf_free(wmi_buf);
-		return QDF_STATUS_E_RESOURCES;
-	}
+	if (!use_direct_cdp) {
+		/* Reserve the cache before WMI submission; submit_pending handles early completion. */
+		if (!wma_injection_debug_cache_update(mgmt_params.desc_id, req,
+						      fc_type, fc_subtype,
+						      mgmt_params.chanfreq, wmi_buf)) {
+			wma_err("Injection: unable to reserve debug-cache slot for desc_id=%u",
+				mgmt_params.desc_id);
+			qdf_nbuf_free(wmi_buf);
+			return QDF_STATUS_E_RESOURCES;
+		}
 
-	/* Attempt WMI management TX path. */
-	wmi_tx_attempted = true;
-	if (!inject_wmi_path_logged) {
-		wma_info("Injection using WMI mgmt tx path (vdev_id=%u)",
-			 mgmt_params.vdev_id);
-		inject_wmi_path_logged = true;
-	}
-	if (inject_send_info_count <= 10) {
-		wma_info("Injection WMI submit: vdev_id=%u chanfreq=%u len=%u use_6mbps=%u tx_params_valid=%u tx_rate=%u",
-			 mgmt_params.vdev_id, mgmt_params.chanfreq,
-			 req->frame_len, mgmt_params.use_6mbps,
-			 mgmt_params.tx_params_valid ? 1 : 0, req->tx_rate);
-		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_WMA, QDF_TRACE_LEVEL_INFO,
-				   req->frame_data,
-				   QDF_MIN(32, req->frame_len));
-	}
+		wmi_tx_attempted = true;
+		if (!inject_wmi_path_logged) {
+			wma_info("Injection using WMI mgmt tx path (vdev_id=%u)",
+				 mgmt_params.vdev_id);
+			inject_wmi_path_logged = true;
+		}
+		if (inject_send_info_count <= 10) {
+			wma_info("Injection WMI submit: vdev_id=%u chanfreq=%u len=%u use_6mbps=%u tx_params_valid=%u tx_rate=%u",
+				 mgmt_params.vdev_id, mgmt_params.chanfreq,
+				 req->frame_len, mgmt_params.use_6mbps,
+				 mgmt_params.tx_params_valid ? 1 : 0, req->tx_rate);
+			QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_WMA, QDF_TRACE_LEVEL_INFO,
+					   req->frame_data,
+					   QDF_MIN(32, req->frame_len));
+		}
 
-	status = wmi_mgmt_unified_cmd_send(wma_handle->wmi_handle, &mgmt_params);
-	wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
-	if (!QDF_IS_STATUS_ERROR(status)) {
-		wmi_tx_ok = true;
-	} else {
-		wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
-			 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
-	}
+		status = wmi_mgmt_unified_cmd_send(wma_handle->wmi_handle, &mgmt_params);
+		wma_info("wmi_mgmt_unified_cmd_send returned: %d", status);
+		if (!QDF_IS_STATUS_ERROR(status)) {
+			wmi_tx_ok = true;
+		} else {
+			wma_warn("WMI management TX command failed: %d (service=%u monitor=%u)",
+				 status, wmi_mgmt_service ? 1 : 0, monitor_vdev ? 1 : 0);
+		}
 
-	/*
-	 * The buffer was registered before WMI submission. Reconcile submit
-	 * state only after that call returns; an early completion has set
-	 * completion_pending rather than freeing the buffer from its callback.
-	 */
-	if (wma_injection_debug_cache_submit_done(mgmt_params.desc_id,
-						   wmi_tx_ok)) {
-		/* Completion raced with submit return: never reuse this nbuf. */
-		wmi_tx_ok = true;
-		status = QDF_STATUS_SUCCESS;
+		if (wma_injection_debug_cache_submit_done(mgmt_params.desc_id,
+							   wmi_tx_ok)) {
+			/* Completion raced with submit return: never reuse this nbuf. */
+			wmi_tx_ok = true;
+			status = QDF_STATUS_SUCCESS;
+		}
 	}
 
 	if (!wmi_tx_ok) {
@@ -1964,13 +1961,18 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		 * including for monitor injection. Keep wmi_buf alive for
 		 * cdp_mgmt_send_ext(); do not free it on this fallback path.
 		 */
-		if (monitor_vdev)
-			wma_warn("Injection monitor vdev: WMI failed, attempting CDP Data Path fallback");
+		if (monitor_vdev) {
+			if (use_direct_cdp)
+				wma_warn("Injection monitor vdev: direct CDP selected because mgmt_tx_wmi is not advertised");
+			else
+				wma_warn("Injection monitor vdev: WMI failed, attempting CDP Data Path fallback");
+		}
 
-		/* Fallback to legacy data path if WMI TX is unavailable or failed. */
 		if (!inject_legacy_path_logged) {
-			wma_warn("Injection using legacy cdp_mgmt_send_ext fallback (wmi_mgmt_service=%u)",
-				 wmi_mgmt_service ? 1 : 0);
+			wma_warn("Injection using cdp_mgmt_send_ext Data Path (direct=%u wmi_service=%u wmi_attempted=%u)",
+				 use_direct_cdp ? 1 : 0,
+				 wmi_mgmt_service ? 1 : 0,
+				 wmi_tx_attempted ? 1 : 0);
 			inject_legacy_path_logged = true;
 		}
 
