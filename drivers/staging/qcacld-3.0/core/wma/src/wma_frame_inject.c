@@ -1898,16 +1898,18 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 		status = wma_injection_ensure_tx_vdev(wma_handle,
 						     vdev_id, tx_chanfreq);
 		if (QDF_IS_STATUS_ERROR(status)) {
-			wma_err("Failed to create injection TX helper vdev: %d",
-				status);
-			qdf_nbuf_free(wmi_buf);
-			return status;
-		}
-		mgmt_params.vdev_id = g_inj_tx_vdev.vdev_id;
-		if (!inject_monitor_no_legacy_logged) {
-			wma_warn("Injection monitor: using hidden STA vdev %u for WMI TX (monitor vdev %u)",
-				 g_inj_tx_vdev.vdev_id, vdev_id);
-			inject_monitor_no_legacy_logged = true;
+			/* A failed helper setup must not prevent the host CDP attempt. */
+			wma_warn("Injection TX helper VDEV setup failed: %d; trying CDP on monitor vdev %u",
+				 status, vdev_id);
+			use_direct_cdp = true;
+			mgmt_params.vdev_id = vdev_id;
+		} else {
+			mgmt_params.vdev_id = g_inj_tx_vdev.vdev_id;
+			if (!inject_monitor_no_legacy_logged) {
+				wma_warn("Injection monitor: using hidden STA vdev %u for WMI TX (monitor vdev %u)",
+					 g_inj_tx_vdev.vdev_id, vdev_id);
+				inject_monitor_no_legacy_logged = true;
+			}
 		}
 	}
 
