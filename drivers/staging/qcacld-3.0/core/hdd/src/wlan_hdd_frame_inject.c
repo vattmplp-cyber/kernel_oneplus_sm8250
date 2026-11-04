@@ -154,6 +154,10 @@ QDF_STATUS hdd_init_frame_injection(struct hdd_adapter *adapter)
 		return QDF_STATUS_E_NULL_VALUE;
 	}
 
+	/* Adapter creation and the ioctl fallback may both request setup. */
+	if (adapter->injection_ctx)
+		return QDF_STATUS_SUCCESS;
+
 	/* Initialize global session ID counter on first use */
 	if (!session_id_initialized) {
 		hdd_init_injection_session_id();
@@ -207,13 +211,16 @@ QDF_STATUS hdd_init_frame_injection(struct hdd_adapter *adapter)
 	status = qdf_timer_init(NULL, &injection_ctx->recovery_ctx.recovery_timer,
 				hdd_injection_recovery_timer, adapter, QDF_TIMER_TYPE_SW);
 	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_inject_err("Failed to initialize recovery timer: %d", status);
-		qdf_destroy_work(NULL, &injection_ctx->recovery_ctx.recovery_work);
-		hdd_deinit_injection_security_ctx(&injection_ctx->security_ctx);
-		qdf_spinlock_destroy(&injection_ctx->queue_lock);
-		qdf_list_destroy(&injection_ctx->injection_queue);
-		qdf_mem_free(injection_ctx);
-		return status;
+		/*
+		 * The recovery watchdog is optional. Do not disable the
+		 * actual frame-injection queue because a platform timer
+		 * backend is unavailable.
+		 */
+		injection_ctx->recovery_ctx.recovery_timer_initialized = false;
+		hdd_inject_warn("Recovery timer init failed: %d; continuing without watchdog",
+				status);
+	} else {
+		injection_ctx->recovery_ctx.recovery_timer_initialized = true;
 	}
 
 	/* Initialize work queue for processing injection requests */
@@ -268,8 +275,11 @@ QDF_STATUS hdd_deinit_frame_injection(struct hdd_adapter *adapter)
 	/* Cancel recovery work and timer */
 	qdf_cancel_work(&injection_ctx->recovery_ctx.recovery_work);
 	qdf_flush_work(&injection_ctx->recovery_ctx.recovery_work);
-	qdf_timer_stop(&injection_ctx->recovery_ctx.recovery_timer);
-	qdf_timer_free(&injection_ctx->recovery_ctx.recovery_timer);
+	if (injection_ctx->recovery_ctx.recovery_timer_initialized) {
+		qdf_timer_stop(&injection_ctx->recovery_ctx.recovery_timer);
+		qdf_timer_free(&injection_ctx->recovery_ctx.recovery_timer);
+		injection_ctx->recovery_ctx.recovery_timer_initialized = false;
+	}
 
 	/* Clean up injection queue */
 	qdf_spin_lock_bh(&injection_ctx->queue_lock);
@@ -587,16 +597,27 @@ int hdd_frame_inject_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		return ret;
 	}
 
-	/* Check if injection is supported */
-	if (!adapter->injection_ctx) {
-		hdd_inject_err("Frame injection not initialized");
-		return -EOPNOTSUPP;
-	}
-
-	/* Validate command */
+	/* Validate command before attempting any lazy initialization. */
 	if (cmd != SIOCDEVPRIVATE_FRAME_INJECT) {
 		hdd_inject_err("Invalid IOCTL command: 0x%x", cmd);
 		return -EINVAL;
+	}
+
+	/*
+	 * Adapter setup normally initializes this context. Recreate it here
+	 * if the interface was brought up through a lifecycle path that
+	 * skipped the optional adapter hook. Return the real init error,
+	 * rather than hiding it behind -EOPNOTSUPP.
+	 */
+	if (!adapter->injection_ctx) {
+		hdd_inject_warn("Injection context missing on %s; retrying initialization",
+				dev->name);
+		status = hdd_init_frame_injection(adapter);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			hdd_inject_err("Lazy injection initialization failed: %d",
+				       status);
+			return qdf_status_to_os_return(status);
+		}
 	}
 
 	/* Copy IOCTL data from userspace */
@@ -1205,8 +1226,11 @@ QDF_STATUS hdd_recover_from_injection_error(struct hdd_adapter *adapter,
 		break;
 
 	case HDD_INJECTION_ERROR_TIMEOUT:
-		/* Start recovery timer */
-		qdf_timer_start(&recovery_ctx->recovery_timer, 5000); /* 5 second timeout */
+		/* Start the optional recovery watchdog. */
+		if (recovery_ctx->recovery_timer_initialized)
+			qdf_timer_start(&recovery_ctx->recovery_timer, 5000);
+		else
+			qdf_sched_work(0, &recovery_ctx->recovery_work);
 		status = QDF_STATUS_E_PENDING;
 		break;
 
@@ -1261,7 +1285,8 @@ QDF_STATUS hdd_reset_injection_state(struct hdd_adapter *adapter)
 
 	/* Cancel any pending recovery work */
 	qdf_cancel_work(&recovery_ctx->recovery_work);
-	qdf_timer_stop(&recovery_ctx->recovery_timer);
+	if (recovery_ctx->recovery_timer_initialized)
+		qdf_timer_stop(&recovery_ctx->recovery_timer);
 
 	/* Clear recovery flags */
 	recovery_ctx->recovery_in_progress = false;
