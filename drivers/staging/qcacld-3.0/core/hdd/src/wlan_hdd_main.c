@@ -16291,8 +16291,11 @@ static int hdd_stop_present_mode(struct hdd_context *hdd_ctx,
 
 			cleanup_status = wma_injection_pre_stop_cleanup(wma);
 			if (QDF_IS_STATUS_ERROR(cleanup_status)) {
-				if (wma)
-					wma_resume_injection_queue(wma);
+				/*
+				 * Keep the queue paused: teardown may have partially
+				 * removed the helper VDEV. A later stop attempt retries
+				 * cleanup; resuming TX here could reuse a stale VDEV.
+				 */
 				hdd_err("Injection helper pre-stop cleanup failed: %d",
 					cleanup_status);
 				return qdf_status_to_os_return(cleanup_status);
