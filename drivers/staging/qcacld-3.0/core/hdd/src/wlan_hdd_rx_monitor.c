@@ -164,6 +164,9 @@ int hdd_disable_monitor_mode(struct net_device *dev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	uint8_t vdev_id;
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	QDF_STATUS status;
+#endif
 
 	if (!soc || !adapter)
 		return -EINVAL;
@@ -174,8 +177,6 @@ int hdd_disable_monitor_mode(struct net_device *dev)
 		return -EINVAL;
 
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
-	QDF_STATUS status;
-
 	/*
 	 * Stop new HDD submissions first, then pause/drain the WMA worker and
 	 * destroy the firmware-only TX helper while WMI is still alive.
