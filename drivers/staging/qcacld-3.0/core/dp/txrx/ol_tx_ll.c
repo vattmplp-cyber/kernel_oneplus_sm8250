@@ -185,10 +185,19 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 		 * downloaded to the target via the HTT tx descriptor.
 		 */
 		htt_tx_desc_display(tx_desc->htt_tx_desc);
-		if (use_nonstd_tx)
+		if (use_nonstd_tx) {
+			/*
+			 * qdf_nbuf_get_exemption_type() is a constant NO_EXEMPTION
+			 * getter in this QDF version (there is no setter). The raw
+			 * subtype carries NO_ENCRYPT too, but set the HTT descriptor
+			 * NO_ENCRYPT bit explicitly before handing it to firmware.
+			 */
+			HTT_TX_DESC_NO_ENCRYPT_SET(
+				*((uint32_t *)tx_desc->htt_tx_desc), 1);
 			ol_tx_send_nonstd(vdev->pdev, tx_desc, msdu, pkt_type);
-		else
+		} else {
 			ol_tx_send(vdev->pdev, tx_desc, msdu, vdev->vdev_id);
+		}
 		msdu = next;
 	}
 	return NULL;            /* all MSDUs were accepted */
