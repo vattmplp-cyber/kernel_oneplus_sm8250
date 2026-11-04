@@ -674,6 +674,9 @@ void hdd_process_injection_queue_work(void *arg)
 			uint8_t mon_adapter_vdev_id = 0xff;
 			bool mon_adapter_open = false;
 			bool monitor_mode_active = injection_ctx->is_monitor_mode;
+			bool adapter_is_monitor = false;
+			bool tx_vdev_valid = true;
+			struct net_device *tx_dev = injection_ctx->adapter->dev;
 			struct hdd_context *hdd_ctx;
 			struct hdd_adapter *mon_adapter;
 			void *soc;
@@ -685,18 +688,18 @@ void hdd_process_injection_queue_work(void *arg)
 				status = QDF_STATUS_E_FAILURE;
 				hdd_inject_err("WMA handle unavailable for management TX");
 			} else {
-				if (!monitor_mode_active) {
-					struct net_device *tx_dev =
-						injection_ctx->adapter->dev;
+				adapter_is_monitor =
+					injection_ctx->adapter->device_mode ==
+						QDF_MONITOR_MODE ||
+					(tx_dev &&
+					 (tx_dev->type == ARPHRD_IEEE80211_RADIOTAP ||
+					  (tx_dev->ieee80211_ptr &&
+					   tx_dev->ieee80211_ptr->iftype ==
+						NL80211_IFTYPE_MONITOR)));
 
-					if (injection_ctx->adapter->device_mode ==
-						    QDF_MONITOR_MODE ||
-					    (tx_dev && tx_dev->ieee80211_ptr &&
-					     tx_dev->ieee80211_ptr->iftype ==
-						    NL80211_IFTYPE_MONITOR)) {
-						monitor_mode_active = true;
-						injection_ctx->is_monitor_mode = true;
-					}
+				if (!monitor_mode_active && adapter_is_monitor) {
+					monitor_mode_active = true;
+					injection_ctx->is_monitor_mode = true;
 				}
 
 				soc = cds_get_context(QDF_MODULE_ID_SOC);
@@ -729,6 +732,17 @@ void hdd_process_injection_queue_work(void *arg)
 						   cdp_mon_vdev_id !=
 						    (uint8_t)-EINVAL) {
 						tx_vdev_id = cdp_mon_vdev_id;
+					} else if (adapter_is_monitor) {
+						/* Global monitor mode can use this adapter directly. */
+						tx_vdev_id = injection_ctx->adapter->vdev_id;
+					} else {
+						/*
+						 * Do not silently route monitor management TX
+						 * through a normal STA vdev. The WMA layer would
+						 * then miss the monitor-vdev test and never create
+						 * the firmware TX helper.
+						 */
+						tx_vdev_valid = false;
 					}
 				}
 
@@ -745,9 +759,17 @@ void hdd_process_injection_queue_work(void *arg)
 
 				if (frame_type == 0x00) {
 					/* Management TX uses the firmware helper STA. */
-					status = wma_queue_injection_frame(
-						(tp_wma_handle)injection_ctx->wma_handle,
-						req, tx_vdev_id);
+					if (!tx_vdev_valid) {
+						status = QDF_STATUS_E_INVAL;
+						hdd_inject_err(
+							"Monitor management TX has no valid monitor vdev; adapter_vdev=%u cdp_monitor_vdev=%u",
+							injection_ctx->adapter->vdev_id,
+							cdp_mon_vdev_id);
+					} else {
+						status = wma_queue_injection_frame(
+							(tp_wma_handle)injection_ctx->wma_handle,
+							req, tx_vdev_id);
+					}
 				} else if (frame_type == 0x04 || frame_type == 0x08) {
 					/* DATA and CONTROL use raw CDP/HTT TX. */
 					if (!monitor_mode_active)
