@@ -216,7 +216,8 @@ struct wma_injection_tx_vdev {
 static struct wma_injection_tx_vdev g_inj_tx_vdev;
 static int8_t g_inj_tx_power_limit_dbm = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
 
-static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma);
+static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma,
+						 bool wait_for_inflight);
 
 /**
  * wma_injection_reset_session_state() - Reset per-session static state
@@ -308,7 +309,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 				return QDF_STATUS_SUCCESS;
 		}
 		/* Channel, monitor vdev, or derived MAC changed — recreate. */
-		status = wma_injection_destroy_tx_vdev(wma);
+		status = wma_injection_destroy_tx_vdev(wma, false);
 		if (QDF_IS_STATUS_ERROR(status))
 			return status;
 	}
@@ -563,7 +564,8 @@ QDF_STATUS wma_injection_get_tx_power_limit(uint8_t monitor_vdev_id,
  * Late-path teardown (called from deinit_injection_queue / wma_close).
  * WMI may already be stopped, so failures are tolerated.
  */
-static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma)
+static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma,
+						 bool wait_for_inflight)
 {
 	int wait_ms = 0;
 	QDF_STATUS status;
@@ -579,7 +581,12 @@ static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma)
 	 * reaper has retired outstanding DMA mappings. Never delete the VDEV
 	 * while the host still owns buffers that firmware may be reading.
 	 */
-	while (qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0 &&
+	if (!wait_for_inflight &&
+	    qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0)
+		return QDF_STATUS_E_AGAIN;
+
+	while (wait_for_inflight &&
+	       qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0 &&
 	       wait_ms < 3500) {
 		msleep(20);
 		wait_ms += 20;
@@ -672,7 +679,7 @@ QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 
 	wma_info("Pre-stop cleanup: destroying injection helper vdev_id=%u",
 		 g_inj_tx_vdev.vdev_id);
-	return wma_injection_destroy_tx_vdev(wma_handle);
+	return wma_injection_destroy_tx_vdev(wma_handle, true);
 }
 static void
 wma_injection_debug_cache_update(uint32_t desc_id,
@@ -1433,7 +1440,7 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	qdf_flush_work(&ctx->queue_work);
 
 	/* Destroy hidden injection TX vdev only after sends are quiesced. */
-	status = wma_injection_destroy_tx_vdev(wma_handle);
+	status = wma_injection_destroy_tx_vdev(wma_handle, true);
 	if (QDF_IS_STATUS_ERROR(status))
 		wma_warn("Failed to destroy injection TX helper during WMA deinit: %d",
 			 status);
