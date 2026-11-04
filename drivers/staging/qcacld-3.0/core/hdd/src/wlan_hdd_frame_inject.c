@@ -28,6 +28,7 @@
 #include "wlan_hdd_inject_security.h"
 #include "wma_frame_inject.h"
 #include <linux/if.h>
+#include <linux/if_arp.h>
 #include <linux/netdevice.h>
 #include <net/genetlink.h>
 #include <net/cfg80211.h>
