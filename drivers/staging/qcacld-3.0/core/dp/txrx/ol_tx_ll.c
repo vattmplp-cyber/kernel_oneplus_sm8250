@@ -130,14 +130,6 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 
 	msdu_info.htt.info.l2_hdr_type = vdev->pdev->htt_pkt_type;
 	msdu_info.htt.action.tx_comp_req = 0;
-	/*
-	 * cdp_tx_non_std() raw injection uses NO_ENCRYPT/NWIFI_NO_ENCRYPT
-	 * flags. Initialize this explicitly: the stack object is otherwise
-	 * uninitialized and SW encap may set the Protected bit accidentally.
-	 */
-	msdu_info.htt.action.do_encrypt =
-		!(tx_spec & (OL_TX_SPEC_NO_ENCRYPT |
-			     OL_TX_SPEC_NWIFI_NO_ENCRYPT));
 
 	/*
 	 * The msdu_list variable could be used instead of the msdu var,
