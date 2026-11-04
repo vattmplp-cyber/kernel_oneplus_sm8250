@@ -7365,8 +7365,6 @@ static void hdd_reset_scan_operation(struct hdd_context *hdd_ctx,
 	default:
 		break;
 	}
-
-	return 0;
 }
 
 #ifdef QCA_LL_LEGACY_TX_FLOW_CONTROL
@@ -16318,6 +16316,8 @@ static int hdd_stop_present_mode(struct hdd_context *hdd_ctx,
 	default:
 		break;
 	}
+
+	return 0;
 }
 
 static void hdd_cleanup_present_mode(struct hdd_context *hdd_ctx,
