@@ -2547,7 +2547,7 @@ static int wma_process_mgmt_tx_completion(tp_wma_handle wma_handle,
 	 * Monitor-mode injection uses dedicated descriptor ids that are not
 	 * backed by MGMT_TXRX pool entries.
 	 */
-	if (desc_id == 0 || WMA_IS_INJECTION_DESC_ID(desc_id)) {
+	if (WMA_IS_INJECTION_DESC_ID(desc_id)) {
 		uint32_t norm_status = status;
 		/*
 		 * Some firmware builds return an extended status word where
