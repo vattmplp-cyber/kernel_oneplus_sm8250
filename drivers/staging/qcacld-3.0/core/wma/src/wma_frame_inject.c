@@ -1142,6 +1142,10 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 	wma_debug("Injection queue processing cycle complete: processed=%u, deferred=%u",
 		  processed_count, deferred_count);
 
+	/* Avoid immediate workqueue rescheduling while traffic coordination blocks TX. */
+	if (deferred_count)
+		return QDF_STATUS_E_AGAIN;
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -1181,9 +1185,13 @@ static void wma_process_injection_queue_work(void *arg)
 
 	/* Process the queue */
 	status = wma_process_injection_queue(wma_handle);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		wma_err("Failed to process injection queue: %d", status);
+	if (status == QDF_STATUS_E_AGAIN) {
+		/* Traffic coordination is temporarily blocking TX; back off. */
+		qdf_delayed_work_start(&ctx->delayed_work, 100);
+		return;
 	}
+	if (QDF_IS_STATUS_ERROR(status))
+		wma_err("Failed to process injection queue: %d", status);
 
 	/* Check if there are more frames to process */
 	qdf_spin_lock_bh(&ctx->queue_lock);
