@@ -79,11 +79,22 @@ jobs:
               fi
             done
 
-          strings out/vmlinux |
+          # The qcacld driver may be built as a separate object/module rather
+          # than linked into vmlinux. Scan the actual driver objects as well.
+          {
+            find out/drivers/staging/qcacld-3.0 -type f \\( -name '*.o' -o -name '*.ko' \\) -print0 |
+              xargs -0 -r -n1 strings
+            strings out/vmlinux
+          } |
             grep -E 'Frame injection initialized successfully|Processing frame injection|Injection:|Injection TX' |
             sort -u > out/debug-manifest/injection-strings.txt
 
-          grep -q 'Frame injection initialized successfully' out/debug-manifest/injection-strings.txt
+          test -s out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o
+          test -s out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o
+          strings out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o |
+            grep -q 'Frame injection initialized successfully'
+          strings out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o |
+            grep -q 'Injection TX helper vdev created'
           grep -q -- '-DFEATURE_FRAME_INJECTION_SUPPORT' out/debug-manifest/build-identity.txt
           grep -q -- '-DWLAN_LOG_DEBUG' out/debug-manifest/build-identity.txt
 
