@@ -82,7 +82,7 @@ jobs:
           # The qcacld driver may be built as a separate object/module rather
           # than linked into vmlinux. Scan the actual driver objects as well.
           {
-            find out/drivers/staging/qcacld-3.0 -type f \\( -name '*.o' -o -name '*.ko' \\) -print0 |
+            find out/drivers/staging/qcacld-3.0 -type f \( -name '*.o' -o -name '*.ko' \) -print0 |
               xargs -0 -r -n1 strings
             strings out/vmlinux
           } |
