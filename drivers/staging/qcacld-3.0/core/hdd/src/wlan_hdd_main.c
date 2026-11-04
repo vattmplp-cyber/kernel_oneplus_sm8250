@@ -4235,9 +4235,6 @@ static int __hdd_stop(struct net_device *dev)
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 	int ret;
 	mac_handle_t mac_handle;
-#ifdef FEATURE_FRAME_INJECTION_SUPPORT
-	void *wma_handle;
-#endif
 
 	hdd_enter_dev(dev);
 
@@ -4278,20 +4275,18 @@ static int __hdd_stop(struct net_device *dev)
 
 	/*
 	 * Stop monitor RX and tear down the injection TX helper before the
-	 * monitor adapter is deinitialized. This also covers packet-capture
-	 * monitor vdevs while the global con_mode remains in mission mode.
+	 * monitor adapter is deinitialized. Do not continue with VDEV teardown
+	 * if the monitor datapath could not be stopped cleanly.
 	 */
 	if (wlan_hdd_is_session_type_monitor(adapter->device_mode) ||
 	    dev->type == ARPHRD_IEEE80211_RADIOTAP) {
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 		ret = hdd_disable_monitor_mode(dev);
-		if (ret)
+		if (ret) {
 			hdd_warn("Failed to disable monitor datapath before ifdown: %d",
 				 ret);
-
-		wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
-		if (wma_handle)
-			wma_injection_pre_stop_cleanup(wma_handle);
+			return ret;
+		}
 #endif
 	}
 
@@ -15671,6 +15666,19 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 	int ret;
 	unsigned long rc;
 	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	bool monitor_active = false;
+
+	if (hdd_get_conparam() == QDF_GLOBAL_MONITOR_MODE)
+		monitor_active = true;
+
+	if (hdd_ctx) {
+		struct hdd_adapter *mon_adapter;
+
+		mon_adapter = hdd_get_adapter(hdd_ctx, QDF_MONITOR_MODE);
+		if (mon_adapter &&
+		    test_bit(DEVICE_IFACE_OPENED, &mon_adapter->event_flags))
+			monitor_active = true;
+	}
 
 	if (copy_from_user(buf, user_buf, 3)) {
 		pr_err("Failed to read buffer\n");
@@ -15678,6 +15686,12 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 	}
 
 	if (strncmp(buf, wlan_off_str, strlen(wlan_off_str)) == 0) {
+		if (monitor_active &&
+		    !uid_eq(current_euid(), GLOBAL_ROOT_UID)) {
+			hdd_warn_rl("Ignoring framework wifi OFF while monitor mode is active (%s)",
+				    current->comm);
+			goto exit;
+		}
 		pr_debug("Wifi turning off from UI\n");
 		hdd_inform_wifi_off();
 		#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
@@ -15688,6 +15702,12 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 	}
 
 	if (strncmp(buf, wlan_on_str, strlen(wlan_on_str)) == 0) {
+		if (monitor_active &&
+		    !uid_eq(current_euid(), GLOBAL_ROOT_UID)) {
+			hdd_warn_rl("Ignoring framework wifi ON while monitor mode is active (%s)",
+				    current->comm);
+			goto exit;
+		}
 		pr_info("Wifi Turning On from UI\n");
 		#ifdef OPLUS_FEATURE_WIFI_DCS_SWITCH
 		//Add for wifi switch monitor
