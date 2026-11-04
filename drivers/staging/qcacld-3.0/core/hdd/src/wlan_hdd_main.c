@@ -2682,11 +2682,12 @@ static void hdd_mon_mode_ether_setup(struct net_device *dev)
 {
 	dev->header_ops         = NULL;
 	dev->type               = ARPHRD_IEEE80211_RADIOTAP;
-	dev->hard_header_len    = ETH_HLEN;
+	/* Monitor TX carries radiotap + raw 802.11, not an Ethernet header. */
+	dev->hard_header_len    = 0;
 	dev->mtu                = ETH_DATA_LEN;
 	dev->addr_len           = ETH_ALEN;
-	dev->tx_queue_len       = 1000; /* Ethernet wants good queues */
-	dev->flags              = IFF_BROADCAST|IFF_MULTICAST;
+	dev->tx_queue_len       = 1000;
+	dev->flags              = IFF_BROADCAST | IFF_MULTICAST | IFF_NOARP;
 	dev->priv_flags        |= IFF_TX_SKB_SHARING;
 
 	memset(dev->broadcast, 0xFF, ETH_ALEN);
