@@ -339,7 +339,7 @@ static QDF_STATUS hdd_validate_ctrl_frame(uint8_t *frame_data,
 		}
 		break;
 	case HDD_CTRL_SUBTYPE_BA:
-		min_size = 24; /* FC + Duration + RA + TA + BA Control + BA Info */
+		min_size = 26; /* FC + Duration + RA + TA + BA Control + compressed BA bitmap */
 		if (frame_len >= min_size) {
 			/* Validate BA control field */
 			uint16_t ba_control = *(uint16_t *)(frame_data + 16);
