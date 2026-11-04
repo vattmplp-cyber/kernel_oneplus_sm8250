@@ -84,7 +84,7 @@ static inline void wma_injection_unmap_tx_buf(qdf_nbuf_t buf)
 #define WMA_FRAME_INJECT_QUEUE_TIMEOUT_MS  100
 
 /* Reaper timer interval: how often we scan for stale in-flight nbufs (ms) */
-#define WMA_INJECTION_REAPER_INTERVAL_MS   3000
+#define WMA_INJECTION_REAPER_INTERVAL_MS   1000
 
 /*
  * Maximum age (in microseconds, QDF log-timestamp units) before an
@@ -573,7 +573,7 @@ static void wma_injection_destroy_tx_vdev(tp_wma_handle wma)
 	 * firmware-only helper vdev. Keep it alive until the injection-buffer
 	 * reaper has had time to retire outstanding DMA mappings. Deleting a
 	 * VDEV while its TX buffers are still tracked can race firmware DMA.
-	 * The reaper runs every 3 seconds and expires entries after 2 seconds.
+	 * The reaper runs every 1 second and expires entries after 2 seconds.
 	 */
 	while (qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0 &&
 	       wait_ms < 3500) {
@@ -1243,7 +1243,7 @@ static void wma_process_injection_queue_delayed_work(void *context)
  * unchecked the DMA-mapped nbufs accumulate, eventually triggering an SMMU
  * translation fault and a firmware crash.
  *
- * This worker runs every WMA_INJECTION_REAPER_INTERVAL_MS (3 s), scans the
+ * This worker runs every WMA_INJECTION_REAPER_INTERVAL_MS (1 s), scans the
  * debug cache, and frees any entry whose submit_ts is older than
  * WMA_INJECTION_NBUF_TIMEOUT_US (2 s).
  */
