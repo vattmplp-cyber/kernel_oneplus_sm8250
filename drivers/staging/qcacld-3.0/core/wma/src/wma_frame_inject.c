@@ -279,6 +279,8 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	uint8_t inj_mac[QDF_MAC_ADDR_SIZE];
 	uint8_t vid = 0;
 	bool found = false;
+	bool vdev_started = false;
+	bool peer_created = false;
 	int i;
 	QDF_STATUS status;
 	struct wlan_objmgr_pdev *pdev;
@@ -418,6 +420,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		wma_err("Injection TX vdev start failed: %d", status);
 		goto err_stop;
 	}
+	vdev_started = true;
 	msleep(150);
 
 	/*
@@ -444,6 +447,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		wma_err("Injection TX vdev peer create failed: %d", status);
 		goto err_stop;
 	}
+	peer_created = true;
 	msleep(100);
 
 	/*
@@ -464,7 +468,21 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	return QDF_STATUS_SUCCESS;
 
 err_stop:
+	/*
+	 * Unwind only the firmware objects that were successfully created.
+	 * A started vdev must be stopped before deletion; otherwise a failed
+	 * peer-create or TX-power setup can leave a live firmware vdev behind.
+	 */
+	if (peer_created) {
+		wmi_unified_peer_delete_send(wma->wmi_handle, inj_mac, vid);
+		msleep(100);
+	}
+	if (vdev_started) {
+		wmi_unified_vdev_stop_send(wma->wmi_handle, vid);
+		msleep(100);
+	}
 	wmi_unified_vdev_delete_send(wma->wmi_handle, vid);
+	msleep(100);
 	return status;
 }
 
