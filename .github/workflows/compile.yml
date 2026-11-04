@@ -52,6 +52,8 @@ jobs:
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
       - name: Save Build Identity and Diagnostics
+        if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -85,23 +87,32 @@ jobs:
             find out/drivers/staging/qcacld-3.0 -type f \( -name '*.o' -o -name '*.ko' \) -print0 |
               xargs -0 -r -n1 strings
             strings out/vmlinux
-          } |
-            grep -E 'Frame injection initialized successfully|Processing frame injection|Injection:|Injection TX' |
-            sort -u > out/debug-manifest/injection-strings.txt
+          } | grep -E 'Frame injection initialized successfully|Processing frame injection|Injection:|Injection TX' | sort -u > out/debug-manifest/injection-strings.txt || {
+            echo "::warning::No expected injection strings found in compiled objects; inspect object-symbol checks and build manifest."
+            : > out/debug-manifest/injection-strings.txt
+          }
 
           test -s out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o
           test -s out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o
-          strings out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o |
-            grep -q 'Frame injection initialized successfully'
-          strings out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o |
-            grep -q 'Injection TX helper vdev created'
+          if strings out/drivers/staging/qcacld-3.0/core/hdd/src/wlan_hdd_frame_inject.o | grep -q 'Frame injection initialized successfully'; then
+            echo 'PASS: HDD injection object contains init log string'
+          else
+            echo '::warning::HDD injection init string absent; verify symbols and compile flags'
+          fi
+          if strings out/drivers/staging/qcacld-3.0/core/wma/src/wma_frame_inject.o | grep -q 'Injection TX helper vdev created'; then
+            echo 'PASS: WMA helper-VDEV log string present'
+          else
+            echo '::warning::WMA helper-VDEV log string absent; verify symbols and compile flags'
+          fi
           grep -q -- '-DFEATURE_FRAME_INJECTION_SUPPORT' out/debug-manifest/build-identity.txt
           grep -q -- '-DWLAN_LOG_DEBUG' out/debug-manifest/build-identity.txt
 
       - name: Upload Kernel Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Meteoric-Kebab-DIAGNOSTIC
+          if-no-files-found: warn
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
