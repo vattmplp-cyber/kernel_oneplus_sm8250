@@ -434,10 +434,9 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	status = wma_vdev_set_param(wma->wmi_handle, vid,
 				    WMI_VDEV_PARAM_TX_PWRLIMIT,
 				    tx_power_cap);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		wma_err("Injection TX vdev TX-power limit failed: %d", status);
-		goto err_stop;
-	}
+	if (QDF_IS_STATUS_ERROR(status))
+		wma_warn("Injection TX vdev TX-power parameter unsupported/failed: %d; retaining VDEV_START regulatory cap",
+			 status);
 
 	/* ---------- 3. PEER CREATE (self-peer → fw vdev+0xc) ---------- */
 	qdf_mem_zero(&pcreate, sizeof(pcreate));
