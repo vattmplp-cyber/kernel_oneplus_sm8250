@@ -344,6 +344,7 @@ struct hdd_injection_recovery_ctx {
 	uint32_t recovery_attempts;
 	struct hdd_injection_error_info last_error;
 	uint32_t consecutive_errors;
+	bool recovery_timer_initialized;
 	qdf_timer_t recovery_timer;
 	qdf_work_t recovery_work;
 };
