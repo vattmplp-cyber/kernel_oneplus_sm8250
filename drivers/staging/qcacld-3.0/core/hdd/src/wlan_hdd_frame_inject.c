@@ -733,8 +733,9 @@ void hdd_process_injection_queue_work(void *arg)
 						   cdp_mon_vdev_id !=
 						    (uint8_t)-EINVAL) {
 						tx_vdev_id = cdp_mon_vdev_id;
-					} else if (adapter_is_monitor) {
-						/* Global monitor mode can use this adapter directly. */
+					} else if (injection_ctx->adapter->device_mode ==
+						   QDF_MONITOR_MODE) {
+						/* The adapter itself owns a monitor WMA vdev. */
 						tx_vdev_id = injection_ctx->adapter->vdev_id;
 					} else {
 						/*
