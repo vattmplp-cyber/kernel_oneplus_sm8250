@@ -7365,6 +7365,8 @@ static void hdd_reset_scan_operation(struct hdd_context *hdd_ctx,
 	default:
 		break;
 	}
+
+	return 0;
 }
 
 #ifdef QCA_LL_LEGACY_TX_FLOW_CONTROL
@@ -16270,35 +16272,36 @@ static bool is_con_mode_valid(enum QDF_GLOBAL_MODE mode)
 	}
 }
 
-static void hdd_stop_present_mode(struct hdd_context *hdd_ctx,
+static int hdd_stop_present_mode(struct hdd_context *hdd_ctx,
 				  enum QDF_GLOBAL_MODE curr_mode)
 {
 	if (hdd_ctx->driver_status == DRIVER_MODULES_CLOSED)
-		return;
+		return 0;
 
 	switch (curr_mode) {
 	case QDF_GLOBAL_MONITOR_MODE:
-		hdd_info("Release wakelock for monitor mode!");
-		qdf_wake_lock_release(&hdd_ctx->monitor_mode_wakelock,
-				      WIFI_POWER_EVENT_WAKELOCK_MONITOR_MODE);
-
 		/*
-		 * Destroy the hidden injection STA helper vdev BEFORE
-		 * stopping adapters.  The firmware asserts in
-		 * dispatch_wlan_pdev_cmds if the orphaned STA vdev is
-		 * still present when the monitor vdev is torn down.
+		 * Drain the injection queue and destroy its hidden STA VDEV
+		 * before stopping the monitor VDEV. If DMA is still outstanding,
+		 * abort this mode transition rather than orphaning the helper.
 		 */
 		{
 			tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 			QDF_STATUS cleanup_status;
 
-			if (wma) {
-				cleanup_status = wma_injection_pre_stop_cleanup(wma);
-				if (QDF_IS_STATUS_ERROR(cleanup_status))
-					hdd_err("Injection helper pre-stop cleanup failed: %d",
-						cleanup_status);
+			cleanup_status = wma_injection_pre_stop_cleanup(wma);
+			if (QDF_IS_STATUS_ERROR(cleanup_status)) {
+				if (wma)
+					wma_resume_injection_queue(wma);
+				hdd_err("Injection helper pre-stop cleanup failed: %d",
+					cleanup_status);
+				return qdf_status_to_os_return(cleanup_status);
 			}
 		}
+
+		hdd_info("Release wakelock for monitor mode!");
+		qdf_wake_lock_release(&hdd_ctx->monitor_mode_wakelock,
+				      WIFI_POWER_EVENT_WAKELOCK_MONITOR_MODE);
 
 		/* fallthrough */
 	case QDF_GLOBAL_MISSION_MODE:
@@ -16513,7 +16516,11 @@ static int __hdd_driver_mode_change(struct hdd_context *hdd_ctx,
 	hdd_psoc_idle_timer_stop(hdd_ctx);
 
 	/* ensure adapters are stopped */
-	hdd_stop_present_mode(hdd_ctx, curr_mode);
+	errno = hdd_stop_present_mode(hdd_ctx, curr_mode);
+	if (errno) {
+		hdd_psoc_idle_timer_start(hdd_ctx);
+		return errno;
+	}
 
 	if (DRIVER_MODULES_CLOSED != hdd_ctx->driver_status) {
 		is_mode_change_psoc_idle_shutdown = true;
