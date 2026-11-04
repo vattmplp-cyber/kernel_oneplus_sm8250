@@ -68,14 +68,16 @@
 #define HDD_MGMT_SUBTYPE_DEAUTH        0xc0
 #define HDD_MGMT_SUBTYPE_ACTION        0xd0
 
-/* Control frame subtypes */
-#define HDD_CTRL_SUBTYPE_RTS           0x40
-#define HDD_CTRL_SUBTYPE_CTS           0x50
-#define HDD_CTRL_SUBTYPE_ACK           0x60
-#define HDD_CTRL_SUBTYPE_CFEND         0x70
-#define HDD_CTRL_SUBTYPE_CFENDACK      0x80
-#define HDD_CTRL_SUBTYPE_BAR           0x90
-#define HDD_CTRL_SUBTYPE_BA            0xa0
+/* Control frame subtypes (IEEE80211_FC0_SUBTYPE_MASK is 0xf0). */
+#define HDD_CTRL_SUBTYPE_TRIGGER       0x20
+#define HDD_CTRL_SUBTYPE_BAR           0x80
+#define HDD_CTRL_SUBTYPE_BA            0x90
+#define HDD_CTRL_SUBTYPE_PS_POLL       0xa0
+#define HDD_CTRL_SUBTYPE_RTS           0xb0
+#define HDD_CTRL_SUBTYPE_CTS           0xc0
+#define HDD_CTRL_SUBTYPE_ACK           0xd0
+#define HDD_CTRL_SUBTYPE_CFEND         0xe0
+#define HDD_CTRL_SUBTYPE_CFENDACK      0xf0
 
 /* Data frame subtypes */
 #define HDD_DATA_SUBTYPE_DATA          0x00
@@ -304,6 +306,9 @@ static QDF_STATUS hdd_validate_ctrl_frame(uint8_t *frame_data,
 
 	/* Validate minimum size based on subtype */
 	switch (frame_subtype) {
+	case HDD_CTRL_SUBTYPE_PS_POLL:
+		min_size = 16; /* FC + AID/Duration + BSSID + TA */
+		break;
 	case HDD_CTRL_SUBTYPE_RTS:
 		min_size = 16; /* FC + Duration + RA + TA */
 		/* RTS frames should have reasonable duration */
