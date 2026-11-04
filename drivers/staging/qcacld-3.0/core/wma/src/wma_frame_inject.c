@@ -642,17 +642,17 @@ QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
 	QDF_STATUS status;
 
-	if (!g_inj_tx_vdev.created)
-		return QDF_STATUS_SUCCESS;
-	if (!wma_handle || !wma_handle->wmi_handle) {
-		wma_err("WMI unavailable for injection helper pre-stop cleanup");
+	if (!wma_handle) {
+		if (!g_inj_tx_vdev.created)
+			return QDF_STATUS_SUCCESS;
+		wma_err("Invalid WMA handle for injection helper pre-stop cleanup");
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	/*
-	 * Stop accepting and draining queued management frames before removing
-	 * the firmware-only STA. A queue worker must never recreate the helper
-	 * after this teardown sequence has started.
+	 * Stop accepting and drain queued frames even if the lazy helper VDEV
+	 * has not been created yet. Otherwise a queued request could run after
+	 * the monitor VDEV starts shutting down.
 	 */
 	if (ctx->is_initialized) {
 		qdf_spin_lock_bh(&ctx->queue_lock);
@@ -661,6 +661,13 @@ QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 		status = wma_flush_injection_queue(wma_handle);
 		if (QDF_IS_STATUS_ERROR(status))
 			return status;
+	}
+
+	if (!g_inj_tx_vdev.created)
+		return QDF_STATUS_SUCCESS;
+	if (!wma_handle->wmi_handle) {
+		wma_err("WMI unavailable for injection helper pre-stop cleanup");
+		return QDF_STATUS_E_FAILURE;
 	}
 
 	wma_info("Pre-stop cleanup: destroying injection helper vdev_id=%u",
