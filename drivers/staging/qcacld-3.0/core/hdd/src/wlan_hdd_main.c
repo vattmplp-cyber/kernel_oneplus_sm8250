@@ -5029,6 +5029,8 @@ static const struct net_device_ops wlan_mon_drv_ops = {
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 	.ndo_start_xmit = hdd_hard_start_xmit,
 #endif
+	/* Keep private injection/debug ioctls reachable in monitor mode. */
+	.ndo_do_ioctl = hdd_ioctl,
 	.ndo_get_stats = hdd_get_stats,
 };
 
