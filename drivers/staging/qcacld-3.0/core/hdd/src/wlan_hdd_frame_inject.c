@@ -113,11 +113,10 @@ hdd_send_raw_injection_frame(void *soc_handle, uint8_t vdev_id,
 	qdf_mem_copy(frame, req->frame_data, req->frame_len);
 	qdf_nbuf_set_next(nbuf, NULL);
 	/*
-	 * ol_tx_desc_ll() sets do_encrypt from this skb exemption value.
-	 * Keep the supplied raw 802.11 frame unencrypted and preserve its
-	 * original Protected bit rather than adding one in software.
+	 * The NO_ENCRYPT flag in tx_spec is applied directly to the HTT
+	 * descriptor by ol_tx_non_std_ll(); this QDF revision has no setter
+	 * for the exemption type.
 	 */
-	qdf_nbuf_set_exemption_type(nbuf, QDF_NBUF_EXEMPT_ALWAYS);
 
 	/*
 	 * 0x1 RAW: frame already has its full 802.11 header.
