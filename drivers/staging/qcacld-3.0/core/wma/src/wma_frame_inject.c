@@ -613,22 +613,22 @@ static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma,
 		status = wmi_unified_peer_delete_send(wma->wmi_handle,
 					      g_inj_tx_vdev.mac_addr,
 					      g_inj_tx_vdev.vdev_id);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			wma_err("Injection helper peer delete send failed: %d", status);
-			return status;
-		}
-		g_inj_tx_vdev.peer_created = false;
+		if (QDF_IS_STATUS_ERROR(status))
+			wma_warn("Injection helper peer delete send failed: %d; continuing with VDEV stop",
+				 status);
+		else
+			g_inj_tx_vdev.peer_created = false;
 		msleep(100);
 	}
 
 	if (g_inj_tx_vdev.started) {
 		status = wmi_unified_vdev_stop_send(wma->wmi_handle,
 					    g_inj_tx_vdev.vdev_id);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			wma_err("Injection helper vdev stop send failed: %d", status);
-			return status;
-		}
-		g_inj_tx_vdev.started = false;
+		if (QDF_IS_STATUS_ERROR(status))
+			wma_warn("Injection helper vdev stop send failed: %d; attempting VDEV delete",
+				 status);
+		else
+			g_inj_tx_vdev.started = false;
 		msleep(100);
 	}
 
