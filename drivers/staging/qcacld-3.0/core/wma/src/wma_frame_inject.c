@@ -545,30 +545,42 @@ QDF_STATUS wma_injection_get_tx_power_limit(uint8_t monitor_vdev_id,
  */
 static void wma_injection_destroy_tx_vdev(tp_wma_handle wma)
 {
+	int wait_ms = 0;
+
 	if (!g_inj_tx_vdev.created || !wma || !wma->wmi_handle)
 		return;
 
 	/*
-	 * Proper teardown order (reverse of create):
-	 *   PEER_DELETE → VDEV_STOP → VDEV_DELETE
-	 * Each step needs a sleep so firmware finishes processing
-	 * before the next command arrives.  Without this, a
-	 * subsequent VDEV_CREATE for the same slot races with the
-	 * pending DELETE and firmware asserts.
+	 * The firmware may not emit a management-TX completion for this
+	 * firmware-only helper vdev. Keep it alive until the injection-buffer
+	 * reaper has had time to retire outstanding DMA mappings. Deleting a
+	 * VDEV while its TX buffers are still tracked can race firmware DMA.
+	 * The reaper runs every 3 seconds and expires entries after 2 seconds.
 	 */
+	while (qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0 &&
+	       wait_ms < 3500) {
+		msleep(20);
+		wait_ms += 20;
+	}
 
-	/* 1. PEER_DELETE */
+	if (qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0)
+		wma_warn("Injection helper teardown after wait timeout: inflight=%d",
+			 qdf_atomic_read(&g_wma_injection_ctx.inflight_count));
+
+	/*
+	 * Proper teardown order (reverse of create):
+	 *   PEER_DELETE → VDEV_STOP → VDEV_DELETE.
+	 * Keep the gaps: firmware processes these WMI commands asynchronously.
+	 */
 	wmi_unified_peer_delete_send(wma->wmi_handle,
 				     g_inj_tx_vdev.mac_addr,
 				     g_inj_tx_vdev.vdev_id);
 	msleep(100);
 
-	/* 2. VDEV_STOP (we did VDEV_START during create) */
 	wmi_unified_vdev_stop_send(wma->wmi_handle,
 				   g_inj_tx_vdev.vdev_id);
 	msleep(100);
 
-	/* 3. VDEV_DELETE */
 	wmi_unified_vdev_delete_send(wma->wmi_handle,
 				     g_inj_tx_vdev.vdev_id);
 	msleep(100);
@@ -617,7 +629,6 @@ void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 		return;
 
 	if (!wma_handle->wmi_handle) {
-		/* WMI already gone – just clear host state */
 		wma_warn("WMI down, clearing injection vdev state only");
 		qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
 		return;
@@ -625,28 +636,8 @@ void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 
 	wma_info("Pre-stop cleanup: destroying injection helper vdev_id=%u",
 		 g_inj_tx_vdev.vdev_id);
-
-	/* 1. PEER_DELETE */
-	wmi_unified_peer_delete_send(wma_handle->wmi_handle,
-				     g_inj_tx_vdev.mac_addr,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	/* 2. VDEV_STOP (we did VDEV_START during create) */
-	wmi_unified_vdev_stop_send(wma_handle->wmi_handle,
-				   g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	/* 3. VDEV_DELETE */
-	wmi_unified_vdev_delete_send(wma_handle->wmi_handle,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	wma_info("Pre-stop cleanup: injection helper vdev destroyed: vdev_id=%u",
-		 g_inj_tx_vdev.vdev_id);
-	qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
+	wma_injection_destroy_tx_vdev(wma_handle);
 }
-
 static void
 wma_injection_debug_cache_update(uint32_t desc_id,
 				 struct inject_frame_req *req,
