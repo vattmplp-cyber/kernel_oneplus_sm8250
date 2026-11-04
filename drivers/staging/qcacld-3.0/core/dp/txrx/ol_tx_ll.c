@@ -192,8 +192,10 @@ ol_tx_non_std_ll(struct ol_txrx_vdev_t *vdev,
 			 * subtype carries NO_ENCRYPT too, but set the HTT descriptor
 			 * NO_ENCRYPT bit explicitly before handing it to firmware.
 			 */
-			HTT_TX_DESC_NO_ENCRYPT_SET(
-				*((uint32_t *)tx_desc->htt_tx_desc), 1);
+			if (tx_spec & (OL_TX_SPEC_NO_ENCRYPT |
+				       OL_TX_SPEC_NWIFI_NO_ENCRYPT))
+				HTT_TX_DESC_NO_ENCRYPT_SET(
+					*((uint32_t *)tx_desc->htt_tx_desc), 1);
 			ol_tx_send_nonstd(vdev->pdev, tx_desc, msdu, pkt_type);
 		} else {
 			ol_tx_send(vdev->pdev, tx_desc, msdu, vdev->vdev_id);
