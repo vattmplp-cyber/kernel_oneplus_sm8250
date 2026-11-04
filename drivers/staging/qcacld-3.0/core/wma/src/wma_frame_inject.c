@@ -206,7 +206,10 @@ static qdf_spinlock_t g_wma_injection_cache_lock;
  *   the hidden vdev_id.
  */
 struct wma_injection_tx_vdev {
-	bool created;
+	bool created;       /* Firmware accepted VDEV_CREATE */
+	bool started;       /* Firmware accepted VDEV_START */
+	bool peer_created;  /* Firmware accepted self-peer CREATE */
+	bool ready;         /* Safe to submit management TX */
 	uint8_t vdev_id;
 	uint8_t monitor_vdev_id;
 	uint32_t chanfreq;
@@ -280,26 +283,23 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	uint8_t inj_mac[QDF_MAC_ADDR_SIZE];
 	uint8_t vid = 0;
 	bool found = false;
-	bool vdev_started = false;
-	bool peer_created = false;
 	int i;
 	QDF_STATUS status;
+	QDF_STATUS cleanup_status;
 	struct wlan_objmgr_pdev *pdev;
 	uint8_t reg_power;
 	int8_t tx_power_cap;
 
 	if (g_inj_tx_vdev.created) {
 		/*
-		 * Reuse the helper only if it still belongs to this monitor
-		 * interface and its derived TX MAC matches the current monitor
-		 * MAC. The monitor vdev can be recreated or its MAC can change
-		 * without a channel change; reusing the old helper in that case
-		 * makes the transmitted source address disagree with the helper
-		 * vdev MAC and can cause firmware to discard frames.
+		 * Reuse only a fully-created helper. A failed peer-create or
+		 * partial teardown leaves a firmware VDEV that must be cleaned
+		 * before another create is attempted; never treat it as TX-ready.
 		 */
 		mon_mac = wlan_vdev_mlme_get_macaddr(
 				wma->interfaces[mon_vdev_id].vdev);
-		if (g_inj_tx_vdev.chanfreq == chanfreq &&
+		if (g_inj_tx_vdev.ready &&
+		    g_inj_tx_vdev.chanfreq == chanfreq &&
 		    g_inj_tx_vdev.monitor_vdev_id == mon_vdev_id &&
 		    mon_mac) {
 			qdf_mem_copy(inj_mac, mon_mac, QDF_MAC_ADDR_SIZE);
@@ -308,7 +308,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 					QDF_MAC_ADDR_SIZE) == 0)
 				return QDF_STATUS_SUCCESS;
 		}
-		/* Channel, monitor vdev, or derived MAC changed — recreate. */
+		/* Channel, MAC, or incomplete lifecycle changed — recreate. */
 		status = wma_injection_destroy_tx_vdev(wma, false);
 		if (QDF_IS_STATUS_ERROR(status))
 			return status;
@@ -398,6 +398,16 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		wma_err("Injection TX vdev create failed: %d", status);
 		return status;
 	}
+	/* Record the firmware object immediately so every later failure can
+	 * unwind it without losing the VDEV ID or issuing a duplicate CREATE.
+	 */
+	qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
+	g_inj_tx_vdev.created = true;
+	g_inj_tx_vdev.vdev_id = vid;
+	g_inj_tx_vdev.monitor_vdev_id = mon_vdev_id;
+	g_inj_tx_vdev.chanfreq = chanfreq;
+	qdf_mem_copy(g_inj_tx_vdev.mac_addr, inj_mac, QDF_MAC_ADDR_SIZE);
+
 	/* Firmware processes WMI commands asynchronously.  Each step must
 	 * complete in firmware before the next command references the vdev.
 	 * Without these sleeps the mgmt-TX arrives before VDEV_CREATE is
@@ -423,7 +433,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		wma_err("Injection TX vdev start failed: %d", status);
 		goto err_stop;
 	}
-	vdev_started = true;
+	g_inj_tx_vdev.started = true;
 	msleep(150);
 
 	/*
@@ -449,7 +459,8 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 		wma_err("Injection TX vdev peer create failed: %d", status);
 		goto err_stop;
 	}
-	peer_created = true;
+	g_inj_tx_vdev.peer_created = true;
+	g_inj_tx_vdev.ready = true;
 	msleep(100);
 
 	/*
@@ -459,11 +470,7 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 	 * STARTED state with a valid peer at vdev+0xc.
 	 */
 
-	g_inj_tx_vdev.created          = true;
-	g_inj_tx_vdev.vdev_id          = vid;
-	g_inj_tx_vdev.monitor_vdev_id  = mon_vdev_id;
-	g_inj_tx_vdev.chanfreq         = chanfreq;
-	qdf_mem_copy(g_inj_tx_vdev.mac_addr, inj_mac, QDF_MAC_ADDR_SIZE);
+	g_inj_tx_vdev.ready = true;
 
 	wma_info("Injection TX helper vdev created: vdev_id=%u mac=%pM freq=%u type=STA",
 		 vid, inj_mac, chanfreq);
@@ -471,20 +478,14 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 
 err_stop:
 	/*
-	 * Unwind only the firmware objects that were successfully created.
-	 * A started vdev must be stopped before deletion; otherwise a failed
-	 * peer-create or TX-power setup can leave a live firmware vdev behind.
+	 * Use the same stateful teardown path for partial creation failures.
+	 * If any WMI delete step fails, retain the lifecycle flags so the next
+	 * attempt retries cleanup instead of allocating a duplicate VDEV ID.
 	 */
-	if (peer_created) {
-		wmi_unified_peer_delete_send(wma->wmi_handle, inj_mac, vid);
-		msleep(100);
-	}
-	if (vdev_started) {
-		wmi_unified_vdev_stop_send(wma->wmi_handle, vid);
-		msleep(100);
-	}
-	wmi_unified_vdev_delete_send(wma->wmi_handle, vid);
-	msleep(100);
+	cleanup_status = wma_injection_destroy_tx_vdev(wma, false);
+	if (QDF_IS_STATUS_ERROR(cleanup_status))
+		wma_err("Injection helper partial-create cleanup failed: %d",
+			cleanup_status);
 	return status;
 }
 
@@ -514,7 +515,10 @@ QDF_STATUS wma_injection_set_tx_power_limit(uint8_t monitor_vdev_id,
 	power_dbm = QDF_MIN(power_dbm,
 			    HDD_FRAME_INJECT_TX_POWER_CAP_DBM);
 
-	if (g_inj_tx_vdev.created &&
+	if (g_inj_tx_vdev.created && !g_inj_tx_vdev.ready)
+		return QDF_STATUS_E_AGAIN;
+
+	if (g_inj_tx_vdev.ready &&
 	    g_inj_tx_vdev.monitor_vdev_id == monitor_vdev_id) {
 		pdev = wlan_vdev_get_pdev(wma->interfaces[monitor_vdev_id].vdev);
 		if (!pdev)
@@ -602,18 +606,31 @@ static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma,
 	 *   PEER_DELETE → VDEV_STOP → VDEV_DELETE.
 	 * Keep the gaps: firmware processes these WMI commands asynchronously.
 	 */
-	status = wmi_unified_peer_delete_send(wma->wmi_handle,
+	/* Once teardown starts, the helper must never be reused for TX. */
+	g_inj_tx_vdev.ready = false;
+
+	if (g_inj_tx_vdev.peer_created) {
+		status = wmi_unified_peer_delete_send(wma->wmi_handle,
 					      g_inj_tx_vdev.mac_addr,
 					      g_inj_tx_vdev.vdev_id);
-	if (QDF_IS_STATUS_ERROR(status))
-		wma_warn("Injection helper peer delete send failed: %d", status);
-	msleep(100);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			wma_err("Injection helper peer delete send failed: %d", status);
+			return status;
+		}
+		g_inj_tx_vdev.peer_created = false;
+		msleep(100);
+	}
 
-	status = wmi_unified_vdev_stop_send(wma->wmi_handle,
+	if (g_inj_tx_vdev.started) {
+		status = wmi_unified_vdev_stop_send(wma->wmi_handle,
 					    g_inj_tx_vdev.vdev_id);
-	if (QDF_IS_STATUS_ERROR(status))
-		wma_warn("Injection helper vdev stop send failed: %d", status);
-	msleep(100);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			wma_err("Injection helper vdev stop send failed: %d", status);
+			return status;
+		}
+		g_inj_tx_vdev.started = false;
+		msleep(100);
+	}
 
 	status = wmi_unified_vdev_delete_send(wma->wmi_handle,
 					      g_inj_tx_vdev.vdev_id);
