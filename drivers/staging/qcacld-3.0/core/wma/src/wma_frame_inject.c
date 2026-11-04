@@ -1067,6 +1067,7 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 	struct wma_injection_queue_node *node;
 	qdf_list_node_t *list_node;
 	QDF_STATUS status;
+	QDF_STATUS requeue_status;
 	uint64_t current_time;
 	uint32_t processed_count = 0;
 	uint32_t deferred_count = 0;
@@ -1146,6 +1147,32 @@ QDF_STATUS wma_process_injection_queue(tp_wma_handle wma_handle)
 
 		/* Send frame to firmware */
 		status = wma_send_injection_frame_to_fw(wma_handle, &node->req, node->vdev_id);
+		/*
+		 * E_AGAIN is transient (for example, the helper VDEV is waiting
+		 * for outstanding DMA to drain after a channel change). Preserve
+		 * FIFO order and retry later instead of discarding the frame.
+		 */
+		if (status == QDF_STATUS_E_AGAIN) {
+			qdf_spin_lock_bh(&ctx->queue_lock);
+			requeue_status = qdf_list_insert_front(&ctx->queue,
+							       &node->node);
+			if (QDF_IS_STATUS_SUCCESS(requeue_status))
+				ctx->queue_size++;
+			qdf_spin_unlock_bh(&ctx->queue_lock);
+
+			if (QDF_IS_STATUS_SUCCESS(requeue_status)) {
+				deferred_count++;
+				break;
+			}
+
+			ctx->stats.frames_dropped++;
+			wma_err("Failed to requeue deferred injection frame: %d",
+				requeue_status);
+			wma_injection_queue_node_free(node);
+			processed_count++;
+			continue;
+		}
+
 		/*
 		 * A successful return here means only that the command was
 		 * accepted by the host/WMI submission path. Count frames_processed
