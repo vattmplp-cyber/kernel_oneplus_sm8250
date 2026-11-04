@@ -75,7 +75,9 @@ static ssize_t hdd_injection_debugfs_stats_show(struct file *file,
 {
 	struct hdd_adapter *adapter = file->private_data;
 	struct hdd_injection_ctx *injection_ctx;
+	struct injection_stats stats_snapshot;
 	struct injection_stats *stats;
+	QDF_STATUS status;
 	char *debug_buf;
 	int len = 0;
 	ssize_t ret;
@@ -85,7 +87,16 @@ static ssize_t hdd_injection_debugfs_stats_show(struct file *file,
 	}
 
 	injection_ctx = adapter->injection_ctx;
-	stats = &injection_ctx->security_ctx.stats;
+	/*
+	 * Merge HDD submission counters with WMA firmware-completion counters.
+	 * Reading security_ctx.stats directly hid successful WMI TX completions
+	 * from this debugfs file even though hdd_get_injection_stats() already
+	 * combines both layers for the vendor-netlink stats command.
+	 */
+	status = hdd_get_injection_stats(adapter, &stats_snapshot);
+	if (QDF_IS_STATUS_ERROR(status))
+		return -EIO;
+	stats = &stats_snapshot;
 
 	debug_buf = qdf_mem_malloc(2048);
 	if (!debug_buf) {
