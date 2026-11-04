@@ -779,12 +779,12 @@ void hdd_process_injection_queue_work(void *arg)
 							req, tx_vdev_id);
 					}
 				} else if (frame_type == 0x04 || frame_type == 0x08) {
-					/* DATA and CONTROL use raw CDP/HTT TX. */
-					if (!monitor_mode_active)
+					/* DATA and CONTROL use the selected monitor CDP VDEV. */
+					if (!monitor_mode_active || !tx_vdev_valid)
 						status = QDF_STATUS_E_INVAL;
 					else
 						status = hdd_send_raw_injection_frame(
-							soc, cdp_mon_vdev_id, req);
+							soc, tx_vdev_id, req);
 				} else {
 					status = QDF_STATUS_E_INVAL;
 				}
