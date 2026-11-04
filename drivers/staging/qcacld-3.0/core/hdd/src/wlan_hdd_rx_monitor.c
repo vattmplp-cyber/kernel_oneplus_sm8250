@@ -174,8 +174,15 @@ int hdd_disable_monitor_mode(struct net_device *dev)
 		return -EINVAL;
 
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	/*
+	 * Stop new HDD submissions first, then pause/drain the WMA worker and
+	 * destroy the firmware-only TX helper while WMI is still alive.
+	 * Leaving that helper behind while the monitor vdev is stopped can
+	 * leave an orphaned firmware vdev and trigger a firmware assert.
+	 */
 	if (QDF_IS_STATUS_ERROR(hdd_frame_inject_disable(adapter)))
 		hdd_warn("Failed to disable frame injection");
+	wma_injection_pre_stop_cleanup(cds_get_context(QDF_MODULE_ID_WMA));
 #endif
 	return cdp_set_monitor_mode(soc, vdev_id, true);
 }
