@@ -148,8 +148,11 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle);
  * @wma_handle: WMA handle
  *
  * Must be called while WMI is still alive, BEFORE the driver sends
- * VDEV_STOP / VDEV_DELETE for the monitor vdev.  Prevents firmware assert
+ * VDEV_STOP / VDEV_DELETE for the monitor vdev. Prevents firmware assert
  * caused by orphaned STA helper vdev during monitor teardown.
+ *
+ * Return: QDF_STATUS_SUCCESS when drained, QDF_STATUS_E_AGAIN while TX DMA
+ *         remains outstanding, or another error if WMI teardown is unavailable.
  */
 QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle);
 
