@@ -164,8 +164,10 @@ int hdd_disable_monitor_mode(struct net_device *dev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
 	uint8_t vdev_id;
+	int ret;
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 	QDF_STATUS status;
+	void *wma_handle;
 #endif
 
 	if (!soc || !adapter)
@@ -185,13 +187,25 @@ int hdd_disable_monitor_mode(struct net_device *dev)
 	 */
 	if (QDF_IS_STATUS_ERROR(hdd_frame_inject_disable(adapter)))
 		hdd_warn("Failed to disable frame injection");
-	status = wma_injection_pre_stop_cleanup(
-			cds_get_context(QDF_MODULE_ID_WMA));
+	wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
+	status = wma_injection_pre_stop_cleanup(wma_handle);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err("Cannot stop monitor mode while injection helper is active: %d",
 			status);
+		if (wma_handle)
+			wma_resume_injection_queue(wma_handle);
+		hdd_frame_inject_enable(adapter);
 		return qdf_status_to_os_return(status);
 	}
 #endif
-	return cdp_set_monitor_mode(soc, vdev_id, true);
+	ret = cdp_set_monitor_mode(soc, vdev_id, true);
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	if (ret) {
+		/* Monitor stop failed; restore the injection path. */
+		if (wma_handle)
+			wma_resume_injection_queue(wma_handle);
+		hdd_frame_inject_enable(adapter);
+	}
+#endif
+	return ret;
 }
