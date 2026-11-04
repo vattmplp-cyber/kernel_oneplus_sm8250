@@ -16276,19 +16276,6 @@ static void hdd_stop_present_mode(struct hdd_context *hdd_ctx,
 	if (hdd_ctx->driver_status == DRIVER_MODULES_CLOSED)
 		return;
 
-#ifdef FEATURE_FRAME_INJECTION_SUPPORT
-	/*
-	 * Tear down the helper TX vdev while WMI is still live.  Doing this
-	 * after adapter teardown can leave an orphaned firmware vdev.
-	 */
-	if (curr_mode == QDF_GLOBAL_MONITOR_MODE) {
-		tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
-
-		if (wma)
-			wma_injection_pre_stop_cleanup(wma);
-	}
-#endif
-
 	switch (curr_mode) {
 	case QDF_GLOBAL_MONITOR_MODE:
 		hdd_info("Release wakelock for monitor mode!");
@@ -16303,9 +16290,14 @@ static void hdd_stop_present_mode(struct hdd_context *hdd_ctx,
 		 */
 		{
 			tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
+			QDF_STATUS cleanup_status;
 
-			if (wma)
-				wma_injection_pre_stop_cleanup(wma);
+			if (wma) {
+				cleanup_status = wma_injection_pre_stop_cleanup(wma);
+				if (QDF_IS_STATUS_ERROR(cleanup_status))
+					hdd_err("Injection helper pre-stop cleanup failed: %d",
+						cleanup_status);
+			}
 		}
 
 		/* fallthrough */
