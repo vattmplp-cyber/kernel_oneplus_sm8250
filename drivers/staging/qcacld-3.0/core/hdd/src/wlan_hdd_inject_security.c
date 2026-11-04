@@ -29,6 +29,7 @@
 #include <linux/interrupt.h>
 #include <linux/time.h>
 #include <linux/netdevice.h>
+#include <linux/if_arp.h>
 #include <net/cfg80211.h>
 #include <qdf_mem.h>
 #include <qdf_trace.h>
@@ -348,8 +349,9 @@ QDF_STATUS hdd_validate_injection_permissions(struct hdd_adapter *adapter,
 	dev = adapter->dev;
 	monitor_mode_active = injection_ctx->is_monitor_mode ||
 		adapter->device_mode == QDF_MONITOR_MODE ||
-		(dev && dev->ieee80211_ptr &&
-		 dev->ieee80211_ptr->iftype == NL80211_IFTYPE_MONITOR);
+		(dev && (dev->type == ARPHRD_IEEE80211_RADIOTAP ||
+		 (dev->ieee80211_ptr &&
+		  dev->ieee80211_ptr->iftype == NL80211_IFTYPE_MONITOR)));
 	if (monitor_mode_active && !injection_ctx->is_monitor_mode) {
 		injection_ctx->is_monitor_mode = true;
 		hdd_security_debug("Monitor mode confirmed from live interface state");
