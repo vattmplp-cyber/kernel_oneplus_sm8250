@@ -151,7 +151,7 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle);
  * VDEV_STOP / VDEV_DELETE for the monitor vdev.  Prevents firmware assert
  * caused by orphaned STA helper vdev during monitor teardown.
  */
-void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle);
+QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle);
 
 /**
  * wma_resume_injection_queue() - Resume frame injection after monitor enable
@@ -367,8 +367,9 @@ static inline QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	return QDF_STATUS_SUCCESS;
 }
 
-static inline void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
+static inline QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 {
+	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS wma_resume_injection_queue(tp_wma_handle wma_handle)
