@@ -4290,8 +4290,13 @@ static int __hdd_stop(struct net_device *dev)
 				 ret);
 
 		wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
-		if (wma_handle)
-			wma_injection_pre_stop_cleanup(wma_handle);
+		ret = qdf_status_to_os_return(
+			wma_injection_pre_stop_cleanup(wma_handle));
+		if (ret) {
+			hdd_err("Refusing monitor ifdown: injection helper cleanup failed: %d",
+				ret);
+			return ret;
+		}
 #endif
 	}
 
