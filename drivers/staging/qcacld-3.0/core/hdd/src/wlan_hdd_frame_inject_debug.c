@@ -74,6 +74,7 @@ static ssize_t hdd_injection_debugfs_stats_show(struct file *file,
 						 loff_t *ppos)
 {
 	struct hdd_adapter *adapter = file->private_data;
+	struct hdd_injection_ctx *injection_ctx;
 	struct injection_stats stats_snapshot;
 	struct injection_stats *stats;
 	QDF_STATUS status;
@@ -84,6 +85,8 @@ static ssize_t hdd_injection_debugfs_stats_show(struct file *file,
 	if (!adapter || !adapter->injection_ctx) {
 		return -EINVAL;
 	}
+
+	injection_ctx = adapter->injection_ctx;
 
 	/*
 	 * Merge HDD submission counters with WMA firmware-completion counters.
