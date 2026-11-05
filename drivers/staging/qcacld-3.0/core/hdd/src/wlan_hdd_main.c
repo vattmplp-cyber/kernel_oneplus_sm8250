@@ -5075,10 +5075,13 @@ void hdd_set_station_ops(struct net_device *dev)
 #endif
 
 #ifdef WLAN_FEATURE_PKT_CAPTURE
-/* Packet Capture mode net_device_ops, doesnot Tx and most of operations. */
+/* Packet Capture mode net_device_ops. */
 static const struct net_device_ops wlan_pktcapture_drv_ops = {
 	.ndo_open = hdd_pktcapture_open,
 	.ndo_stop = hdd_stop,
+#ifdef FEATURE_FRAME_INJECTION_SUPPORT
+	.ndo_start_xmit = hdd_hard_start_xmit,
+#endif
 	.ndo_get_stats = hdd_get_stats,
 };
 
