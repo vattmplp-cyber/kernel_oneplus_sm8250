@@ -216,7 +216,7 @@ struct wma_injection_tx_vdev {
 static struct wma_injection_tx_vdev g_inj_tx_vdev;
 static int8_t g_inj_tx_power_limit_dbm = HDD_FRAME_INJECT_TX_POWER_CAP_DBM;
 
-static void wma_injection_destroy_tx_vdev(tp_wma_handle wma);
+static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma);
 
 /**
  * wma_injection_reset_session_state() - Reset per-session static state
@@ -306,7 +306,9 @@ wma_injection_ensure_tx_vdev(tp_wma_handle wma,
 				return QDF_STATUS_SUCCESS;
 		}
 		/* Channel, monitor vdev, or derived MAC changed — recreate. */
-		wma_injection_destroy_tx_vdev(wma);
+		status = wma_injection_destroy_tx_vdev(wma);
+		if (QDF_IS_STATUS_ERROR(status))
+			return status;
 	}
 
 	/*
@@ -543,39 +545,44 @@ QDF_STATUS wma_injection_get_tx_power_limit(uint8_t monitor_vdev_id,
  * Late-path teardown (called from deinit_injection_queue / wma_close).
  * WMI may already be stopped, so failures are tolerated.
  */
-static void wma_injection_destroy_tx_vdev(tp_wma_handle wma)
+static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma)
 {
-	if (!g_inj_tx_vdev.created || !wma || !wma->wmi_handle)
-		return;
+	QDF_STATUS status;
+	uint8_t vdev_id;
+
+	if (!g_inj_tx_vdev.created)
+		return QDF_STATUS_SUCCESS;
+	if (!wma || !wma->wmi_handle)
+		return QDF_STATUS_E_FAILURE;
+
+	vdev_id = g_inj_tx_vdev.vdev_id;
 
 	/*
-	 * Proper teardown order (reverse of create):
-	 *   PEER_DELETE → VDEV_STOP → VDEV_DELETE
-	 * Each step needs a sleep so firmware finishes processing
-	 * before the next command arrives.  Without this, a
-	 * subsequent VDEV_CREATE for the same slot races with the
-	 * pending DELETE and firmware asserts.
+	 * PEER_DELETE is the teardown trigger for this firmware-only STA.
+	 * Its response is handled by wma_peer_delete_handler(), which calls
+	 * wma_handle_vdev_detach() and dispatches VDEV_DELETE through the
+	 * vdev manager. Do not send raw VDEV_STOP/VDEV_DELETE afterwards:
+	 * that races the asynchronous detach/delete path and collides with
+	 * the vdev response timer (QDF_ASSERT in
+	 * target_if_vdev_mgr_rsp_timer_start).
 	 */
+	status = wmi_unified_peer_delete_send(wma->wmi_handle,
+					      g_inj_tx_vdev.mac_addr,
+					      vdev_id);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		wma_err("Injection helper PEER_DELETE send failed: vdev_id=%u status=%d",
+			vdev_id, status);
+		return status;
+	}
 
-	/* 1. PEER_DELETE */
-	wmi_unified_peer_delete_send(wma->wmi_handle,
-				     g_inj_tx_vdev.mac_addr,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
+	wma_info("Injection helper PEER_DELETE submitted; waiting for WMA detach/delete: vdev_id=%u",
+		 vdev_id);
+	msleep(250);
 
-	/* 2. VDEV_STOP (we did VDEV_START during create) */
-	wmi_unified_vdev_stop_send(wma->wmi_handle,
-				   g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	/* 3. VDEV_DELETE */
-	wmi_unified_vdev_delete_send(wma->wmi_handle,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	wma_info("Injection TX helper vdev destroyed: vdev_id=%u",
-		 g_inj_tx_vdev.vdev_id);
+	wma_info("Injection TX helper vdev teardown handed to WMA: vdev_id=%u",
+		 vdev_id);
 	qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
+	return QDF_STATUS_SUCCESS;
 }
 
 /**
@@ -592,17 +599,20 @@ static void wma_injection_destroy_tx_vdev(tp_wma_handle wma)
  *   PEER_DELETE → VDEV_STOP → VDEV_DELETE
  * with msleep() gaps so the firmware can process each command.
  */
-void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
+QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
+	QDF_STATUS status;
 
 	if (!wma_handle) {
-		wma_err("Invalid WMA handle for pre-stop cleanup");
-		return;
+		if (!g_inj_tx_vdev.created)
+			return QDF_STATUS_SUCCESS;
+		wma_err("Invalid WMA handle for injection helper pre-stop cleanup");
+		return QDF_STATUS_E_FAILURE;
 	}
 
 	/*
-	 * Stop accepting and draining queued management frames before removing
+	 * Stop accepting and drain queued management frames before removing
 	 * the firmware-only STA. A queue worker must never recreate the helper
 	 * after this teardown sequence has started.
 	 */
@@ -610,41 +620,20 @@ void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 		qdf_spin_lock_bh(&ctx->queue_lock);
 		ctx->is_paused = true;
 		qdf_spin_unlock_bh(&ctx->queue_lock);
-		wma_flush_injection_queue(wma_handle);
+		status = wma_flush_injection_queue(wma_handle);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			wma_err("Failed to flush injection queue before monitor stop: %d",
+				status);
+			return status;
+		}
 	}
 
 	if (!g_inj_tx_vdev.created)
-		return;
-
-	if (!wma_handle->wmi_handle) {
-		/* WMI already gone – just clear host state */
-		wma_warn("WMI down, clearing injection vdev state only");
-		qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
-		return;
-	}
+		return QDF_STATUS_SUCCESS;
 
 	wma_info("Pre-stop cleanup: destroying injection helper vdev_id=%u",
 		 g_inj_tx_vdev.vdev_id);
-
-	/* 1. PEER_DELETE */
-	wmi_unified_peer_delete_send(wma_handle->wmi_handle,
-				     g_inj_tx_vdev.mac_addr,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	/* 2. VDEV_STOP (we did VDEV_START during create) */
-	wmi_unified_vdev_stop_send(wma_handle->wmi_handle,
-				   g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	/* 3. VDEV_DELETE */
-	wmi_unified_vdev_delete_send(wma_handle->wmi_handle,
-				     g_inj_tx_vdev.vdev_id);
-	msleep(100);
-
-	wma_info("Pre-stop cleanup: injection helper vdev destroyed: vdev_id=%u",
-		 g_inj_tx_vdev.vdev_id);
-	qdf_mem_zero(&g_inj_tx_vdev, sizeof(g_inj_tx_vdev));
+	return wma_injection_destroy_tx_vdev(wma_handle);
 }
 
 static void
@@ -1398,7 +1387,10 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	qdf_flush_work(&ctx->queue_work);
 
 	/* Destroy hidden injection TX vdev only after sends are quiesced. */
-	wma_injection_destroy_tx_vdev(wma_handle);
+	status = wma_injection_destroy_tx_vdev(wma_handle);
+	if (QDF_IS_STATUS_ERROR(status))
+		wma_warn("Failed to destroy injection helper during queue deinit: %d",
+			 status);
 
 	/* Stop and destroy reaper timer */
 	qdf_delayed_work_stop_sync(&ctx->reaper_work);
@@ -2293,8 +2285,9 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	return QDF_STATUS_SUCCESS;
 }
 
-void wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
+QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 {
+	return QDF_STATUS_SUCCESS;
 }
 
 QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
