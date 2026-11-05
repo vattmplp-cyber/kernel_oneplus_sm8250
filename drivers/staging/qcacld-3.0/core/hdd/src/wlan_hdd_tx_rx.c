@@ -985,7 +985,7 @@ static void hdd_monitor_mode_tx_inject(struct hdd_adapter *adapter,
 		goto drop;
 
 	if (!adapter->injection_ctx) {
-		pr_err("[INJECT_ERR] adapter->injection_ctx is NULL!\\n");
+		pr_err("[INJECT_ERR] adapter->injection_ctx is NULL!\n");
 		goto drop;
 	}
 
@@ -1155,7 +1155,7 @@ static void __hdd_hard_start_xmit(struct sk_buff *skb,
 
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 	if (hdd_is_monitor_tx_dev(adapter, dev)) {
-		pr_err_ratelimited("[INJECT_TX] Packet hit __hdd_hard_start_xmit! if=%s len=%u\\n",
+		pr_err_ratelimited("[INJECT_TX] Packet hit __hdd_hard_start_xmit! if=%s len=%u\n",
 				   dev ? dev->name : "null",
 				   skb ? skb->len : 0);
 		hdd_monitor_mode_tx_inject(adapter, dev, skb);
@@ -1429,7 +1429,7 @@ netdev_tx_t hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 	if (osif_vdev_sync_op_start(net_dev, &vdev_sync)) {
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 		if (hdd_is_monitor_tx_dev(adapter, net_dev)) {
-			pr_err("[INJECT_ERR] osif_vdev_sync_op_start failed on %s!\\n",
+			pr_err("[INJECT_ERR] osif_vdev_sync_op_start failed on %s!\n",
 			       net_dev ? net_dev->name : "null");
 		} else {
 			hdd_debug_rl("Operation on net_dev is not permitted");
