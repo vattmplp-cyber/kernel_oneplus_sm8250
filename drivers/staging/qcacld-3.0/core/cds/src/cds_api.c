@@ -1183,6 +1183,24 @@ QDF_STATUS cds_disable(struct wlan_objmgr_psoc *psoc)
 {
 	QDF_STATUS qdf_status;
 	void *handle;
+	tp_wma_handle wma_handle;
+
+	/*
+	 * Drain injection while the scheduler, dispatcher, WMI and target are
+	 * still fully active. On timeout, preserve all completion machinery and
+	 * return before beginning the general PSOC shutdown sequence.
+	 */
+	wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
+	if (!wma_handle)
+		return QDF_STATUS_E_INVAL;
+
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
+		cds_err("%s: injection DMA is not quiesced: %d",
+			 __func__, qdf_status);
+		wma_setneedshutdown();
+		return qdf_status;
+	}
 
 	/* PSOC disable for all new components. It needs to happen before
 	 * target is PDEV suspended such that a component can abort all its
