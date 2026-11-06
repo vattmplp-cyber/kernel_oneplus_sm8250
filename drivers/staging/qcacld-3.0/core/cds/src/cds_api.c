@@ -48,6 +48,7 @@
 #include "cds_utils.h"
 #include "wlan_logging_sock_svc.h"
 #include "wma.h"
+#include "wma_frame_inject.h"
 #include "pktlog_ac.h"
 #include "wlan_policy_mgr_api.h"
 
@@ -1238,6 +1239,17 @@ QDF_STATUS cds_post_disable(void)
 		return QDF_STATUS_E_INVAL;
 	}
 
+	/*
+	 * Do not disable interrupts or reset HIF while injection DMA ownership
+	 * remains. Keep completion processing alive and let shutdown be retried.
+	 */
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		cds_err("%s: injection DMA is not quiesced: %d",
+			 __func__, qdf_status);
+		return qdf_status;
+	}
+
 	/* flush any unprocessed scheduler messages */
 	sched_ctx = scheduler_get_context();
 	if (sched_ctx)
@@ -1293,6 +1305,24 @@ QDF_STATUS cds_post_disable(void)
 QDF_STATUS cds_close(struct wlan_objmgr_psoc *psoc)
 {
 	QDF_STATUS qdf_status;
+	tp_wma_handle wma_handle;
+
+	wma_handle = cds_get_context(QDF_MODULE_ID_WMA);
+	if (!wma_handle) {
+		cds_err("%s: Invalid WMA context", __func__);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	/*
+	 * cds_close may be called without cds_disable/post_disable. Drain
+	 * injection before shutting down scheduler, dispatcher, WMI or PSOC.
+	 */
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		cds_err("%s: refusing CDS teardown while injection DMA is active: %d",
+			 __func__, qdf_status);
+		return qdf_status;
+	}
 
 	qdf_hang_event_unregister_notifier(&cds_hang_event_notifier);
 	qdf_status = cds_sched_close();
@@ -1348,8 +1378,8 @@ QDF_STATUS cds_close(struct wlan_objmgr_psoc *psoc)
 	} else {
 		qdf_status = wma_close();
 		if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-			cds_err("Failed to close wma");
-			QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+			cds_err("Failed to close wma: %d", qdf_status);
+			return qdf_status;
 		}
 	}
 
