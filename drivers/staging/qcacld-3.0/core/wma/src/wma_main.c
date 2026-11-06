@@ -4277,6 +4277,19 @@ QDF_STATUS wma_stop(void)
 		WMA_LOGE("%s: Invalid mac context", __func__);
 		goto end;
 	}
+
+	/*
+	 * Stop injection while WMI completions are still serviceable. Do this
+	 * before TX management detach, timer teardown, or the later HIF reset.
+	 * A timeout is fail-closed: leave the queue/cache alive and abort stop.
+	 */
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		WMA_LOGE("%s: injection DMA did not drain: %d",
+			 __func__, qdf_status);
+		goto end;
+	}
+
 #ifdef QCA_WIFI_FTM
 	/*
 	 * Tx mgmt detach requires TXRX context which is not created
