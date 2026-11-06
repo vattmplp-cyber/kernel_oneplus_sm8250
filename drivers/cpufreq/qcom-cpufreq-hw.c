@@ -594,7 +594,6 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 			break;
 		}
 
-
 		prev_cc = core_count;
 		prev_freq = cur_freq;
 
@@ -724,7 +723,7 @@ static int qcom_cpu_resources_init(struct platform_device *pdev,
 	for_each_cpu(cpu_r, &c->related_cpus)
 		qcom_freq_domain_map[cpu_r] = c;
 
-	if (index < ARRAY_SIZE(qcom_lut_domain_map))
+	if (index >= 0 && index < ARRAY_SIZE(qcom_lut_domain_map))
 		qcom_lut_domain_map[index] = c;
 
 	return 0;
