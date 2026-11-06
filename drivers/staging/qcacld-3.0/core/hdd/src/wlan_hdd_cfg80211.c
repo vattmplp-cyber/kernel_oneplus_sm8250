@@ -24392,6 +24392,8 @@ static int __wlan_hdd_cfg80211_set_mon_ch(struct wiphy *wiphy,
 		status = adapter->monitor_mode_vdev_up_status;
 		hdd_err_rl("monitor mode channel change failed(status-%d)",
 			   status);
+		/* The completion arrived, but the channel change failed. */
+		adapter->monitor_mode_vdev_up_in_progress = false;
 		return qdf_status_to_os_return(status);
 	}
 
