@@ -87,10 +87,8 @@ static inline void wma_injection_unmap_tx_buf(qdf_nbuf_t buf)
 #define WMA_INJECTION_REAPER_INTERVAL_MS   1000
 
 /*
- * Maximum age (in microseconds, QDF log-timestamp units) before an
- * in-flight nbuf without a firmware completion is considered stale.
- * This is a conservative fallback for the helper vdev's missing completion
- * path; it is not a substitute for a hardware DMA-quiescence guarantee.
+ * Warn when an in-flight nbuf has not completed for this long. Age alone
+ * never proves DMA quiescence and must not be used to unmap or free the nbuf.
  */
 #define WMA_INJECTION_NBUF_TIMEOUT_US      10000000ULL
 
@@ -182,8 +180,9 @@ struct wma_injection_debug_info {
 	uint8_t addr1[QDF_MAC_ADDR_SIZE];
 	uint8_t addr2[QDF_MAC_ADDR_SIZE];
 	uint8_t addr3[QDF_MAC_ADDR_SIZE];
-	qdf_nbuf_t tx_buf; /* nbuf passed to WMI; must be unmapped+freed on completion */
+	qdf_nbuf_t tx_buf; /* DMA-owned until firmware completion */
 	uint64_t submit_ts; /* log-timestamp when submitted to FW */
+	bool reaper_warned; /* timeout warning emitted; never a reclaim permission */
 };
 
 static struct wma_injection_debug_info
@@ -256,13 +255,10 @@ static void wma_injection_reset_session_state(void)
 	}
 
 	/*
-	 * Do NOT sweep/free nbufs from the debug cache here.
-	 * The firmware may still be DMA-reading in-flight buffers;
-	 * freeing them would corrupt FW memory and crash.  Stale
-	 * nbufs are safely freed by:
-	 *   - normal completion handler (wma_handle_injection_fw_response)
-	 *   - slot reuse in wma_injection_debug_cache_update()
-	 *   - wma_deinit_injection_queue() at driver shutdown
+	 * Do NOT sweep/free nbufs from the debug cache here. The firmware may
+	 * still be DMA-reading them. Buffers are reclaimed only after a real
+	 * firmware completion; timeout and slot reuse are never DMA-quiescence
+	 * guarantees.
 	 */
 }
 
@@ -586,9 +582,8 @@ static QDF_STATUS wma_injection_destroy_tx_vdev(tp_wma_handle wma,
 
 	/*
 	 * The firmware may not emit a management-TX completion for this
-	 * firmware-only helper vdev. Keep it alive until the injection-buffer
-	 * reaper has retired outstanding DMA mappings. Never delete the VDEV
-	 * while the host still owns buffers that firmware may be reading.
+	 * firmware-only helper vdev. Keep it alive while any DMA buffer remains
+	 * outstanding. The reaper only warns; it never retires mappings by age.
 	 */
 	if (!wait_for_inflight &&
 	    qdf_atomic_read(&g_wma_injection_ctx.inflight_count) > 0)
@@ -703,7 +698,7 @@ QDF_STATUS wma_injection_pre_stop_cleanup(tp_wma_handle wma_handle)
 		 g_inj_tx_vdev.vdev_id);
 	return wma_injection_destroy_tx_vdev(wma_handle, true);
 }
-static void
+static QDF_STATUS
 wma_injection_debug_cache_update(uint32_t desc_id,
 				 struct inject_frame_req *req,
 				 uint8_t fc_type,
@@ -711,14 +706,11 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 				 uint16_t chanfreq)
 {
 	struct wma_injection_debug_info *entry;
-	qdf_nbuf_t stale_buf = NULL;
-	uint32_t stale_desc_id = 0;
 	uint32_t slot;
-	uint64_t now_ts;
-	uint64_t age_us;
+	uint32_t busy_desc_id = 0;
 
 	if (!desc_id || !req || !req->frame_data)
-		return;
+		return QDF_STATUS_E_INVAL;
 
 	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
 
@@ -726,29 +718,19 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry = &g_wma_injection_debug_cache[slot];
 
 	/*
-	 * Do not recycle a cache slot while its previous send call is still
-	 * submitting, or while its accepted TX buffer is younger than the
-	 * reaper timeout. Reject this request rather than freeing a buffer
-	 * that firmware may still be reading.
+	 * A valid entry or a non-NULL nbuf owns this slot. It remains reserved
+	 * until its completion handler detaches the buffer. A timeout cannot
+	 * establish that the device has stopped DMA, so fail closed and let the
+	 * queue worker retry instead of replacing the descriptor metadata.
 	 */
-	if (entry->valid && entry->desc_id != desc_id && entry->tx_buf) {
-		now_ts = qdf_get_log_timestamp();
-		age_us = entry->submit_ts ?
-			qdf_log_timestamp_to_usecs(now_ts - entry->submit_ts) : 0;
-		if (entry->submit_pending || !entry->submit_ts ||
-		    age_us < WMA_INJECTION_NBUF_TIMEOUT_US) {
-			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
-			wma_warn("Injection: debug cache slot %u busy with desc_id=%u; rejecting desc_id=%u",
-				 slot, entry->desc_id, desc_id);
-			return;
-		}
-		stale_desc_id = entry->desc_id;
-		stale_buf = entry->tx_buf;
-		entry->tx_buf = NULL;
-		qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+	if (entry->valid || entry->tx_buf) {
+		busy_desc_id = entry->desc_id;
+		qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+		wma_warn("Injection: debug cache slot %u busy with desc_id=%u; deferring desc_id=%u",
+			 slot, busy_desc_id, desc_id);
+		return QDF_STATUS_E_AGAIN;
 	}
 
-	entry->valid = false;
 	entry->submit_pending = false;
 	entry->completion_pending = false;
 	entry->completion_status = 0;
@@ -759,6 +741,7 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry->fc_subtype = fc_subtype;
 	entry->tx_buf = NULL;
 	entry->submit_ts = 0;
+	entry->reaper_warned = false;
 	qdf_mem_zero(entry->addr1, sizeof(entry->addr1));
 	qdf_mem_zero(entry->addr2, sizeof(entry->addr2));
 	qdf_mem_zero(entry->addr3, sizeof(entry->addr3));
@@ -772,14 +755,11 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 	entry->valid = true;
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
-	if (stale_buf) {
-		wma_warn("Injection nbuf leak cleanup: stale desc_id=%u",
-			 stale_desc_id);
-		wma_injection_unmap_tx_buf(stale_buf);
-		qdf_nbuf_free(stale_buf);
-	}
+	return QDF_STATUS_SUCCESS;
 }
 
+/*
+ * Claim an entry under the cache lock.
 /*
  * Claim an entry under the cache lock. If completion races with the WMI
  * submit call, record it and defer buffer release until the submitter has
@@ -857,12 +837,13 @@ wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
 			entry->submit_pending = true;
 			entry->completion_pending = false;
 			entry->completion_status = 0;
-			entry->submit_ts = 0;
+			entry->submit_ts = qdf_get_log_timestamp();
+			entry->reaper_warned = false;
 			qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
 			status = QDF_STATUS_SUCCESS;
 		}
-	} else if (entry->valid && entry->desc_id != desc_id) {
-		/* A live descriptor owns this ring slot; retry after it drains. */
+	} else {
+		/* No matching free reservation exists; retry after the owner drains. */
 		status = QDF_STATUS_E_AGAIN;
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
@@ -900,7 +881,6 @@ wma_injection_debug_cache_submit_done(
 			*completion_received = true;
 		} else {
 			entry->submit_pending = false;
-			entry->submit_ts = qdf_get_log_timestamp();
 		}
 		found = true;
 	}
@@ -1325,24 +1305,19 @@ static void wma_process_injection_queue_delayed_work(void *context)
 }
 
 /**
- * wma_injection_reaper_work_cb() - Periodic reaper for stale injection nbufs
+ * wma_injection_reaper_work_cb() - Periodic monitor for stuck injection nbufs
  * @context: Unused
  *
- * The firmware never sends TX-completion events for frames sent on the hidden
- * STA helper vdev because the per-vdev completion callback pointer is NULL in
- * FW context (see wal_local_frame_mgmt_tx_completion / FUN_b013dd78).  Left
- * unchecked the DMA-mapped nbufs accumulate, eventually triggering an SMMU
- * translation fault and a firmware crash.
- *
- * This worker runs every WMA_INJECTION_REAPER_INTERVAL_MS (1 s), scans the
- * debug cache, and frees any entry whose submit_ts is older than
- * WMA_INJECTION_NBUF_TIMEOUT_US (10 s).
+ * A timeout is not proof that firmware stopped reading a DMA-mapped buffer.
+ * The reaper therefore only emits a one-shot warning for each overdue entry.
+ * Ownership is released exclusively by a real firmware completion or after
+ * a separately established hardware DMA-quiescence guarantee.
  */
 static void wma_injection_reaper_work_cb(void *context)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
 	uint64_t now_ts, age_us;
-	uint32_t reaped = 0;
+	uint32_t warned = 0;
 	int i;
 
 	if (!ctx->is_initialized)
@@ -1352,52 +1327,47 @@ static void wma_injection_reaper_work_cb(void *context)
 
 	for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
 		struct wma_injection_debug_info *e;
-		qdf_nbuf_t stale_buf = NULL;
-		uint32_t stale_desc_id = 0;
+		uint32_t desc_id = 0;
 		uint8_t fc_type = 0, fc_subtype = 0;
+		bool warn_entry = false;
 
-		/*
-		 * Atomically claim stale entries so completion, cache-slot reuse,
-		 * and reaper cannot release the same nbuf.
-		 */
 		qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 		e = &g_wma_injection_debug_cache[i];
 		if (e->valid && e->tx_buf && e->submit_ts &&
-		    !e->submit_pending) {
-			/* Timestamp delta is converted from QTI log ticks to usecs. */
-			age_us = qdf_log_timestamp_to_usecs(now_ts - e->submit_ts);
-			if (age_us >= WMA_INJECTION_NBUF_TIMEOUT_US) {
-				stale_buf = e->tx_buf;
-				stale_desc_id = e->desc_id;
+		    now_ts >= e->submit_ts) {
+			age_us = qdf_log_timestamp_to_usecs(now_ts -
+							    e->submit_ts);
+			if (age_us >= WMA_INJECTION_NBUF_TIMEOUT_US &&
+			    !e->reaper_warned) {
+				e->reaper_warned = true;
+				desc_id = e->desc_id;
 				fc_type = e->fc_type;
 				fc_subtype = e->fc_subtype;
-				e->tx_buf = NULL;
-				e->valid = false;
-				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
+				warn_entry = true;
 			}
 		}
 		qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
-		if (stale_buf) {
-			wma_debug("Reaper: freeing stale desc_id=%u age=%llu us fc=0x%02x/0x%02x",
-				  stale_desc_id, age_us, fc_type, fc_subtype);
-			wma_injection_unmap_tx_buf(stale_buf);
-			qdf_nbuf_free(stale_buf);
-			reaped++;
+		if (warn_entry) {
+			wma_warn("Reaper: retaining DMA-owned nbuf desc_id=%u age=%llu us fc=0x%02x/0x%02x; awaiting completion or confirmed DMA stop",
+				 desc_id, age_us, fc_type, fc_subtype);
+			warned++;
 		}
 	}
 
-	if (reaped)
-		wma_info("Reaper: freed %u stale injection nbufs, inflight now %d",
-			 reaped,
+	if (warned)
+		wma_warn("Reaper: %u injection DMA buffer(s) remain owned; inflight=%d",
+			 warned,
 			 qdf_atomic_read(&g_wma_injection_ctx.inflight_count));
 
-	/* Re-arm the periodic timer */
+	/* Re-arm the periodic monitor while the queue remains initialized. */
 	if (ctx->is_initialized)
 		qdf_delayed_work_start(&ctx->reaper_work,
 				       WMA_INJECTION_REAPER_INTERVAL_MS);
 }
 
+
+QDF_STATUS wma_init_injection_queue(
 QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
@@ -1475,6 +1445,10 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	qdf_list_node_t *list_node;
 	QDF_STATUS status;
 	uint32_t dropped_count = 0;
+	uint32_t active_bufs = 0;
+	uint32_t wait_ms = 0;
+	uint32_t i;
+	int inflight;
 
 	if (!wma_handle) {
 		wma_err("Invalid WMA handle");
@@ -1486,7 +1460,7 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 		return QDF_STATUS_SUCCESS;
 	}
 
-	wma_debug("Deinitializing WMA injection queue");
+	wma_debug("Deinitializing WMA injection queue (fail-closed)");
 
 	/* Stop new producers before cancelling work and tearing down the VDEV. */
 	qdf_spin_lock_bh(&ctx->queue_lock);
@@ -1494,30 +1468,19 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 	qdf_spin_unlock_bh(&ctx->queue_lock);
 
 	/*
-	 * Stop producers before tearing down the firmware-only TX vdev.
-	 * Destroying the vdev while queue_work is inside the send path can
-	 * race a management TX against PEER_DELETE/VDEV_STOP/VDEV_DELETE.
+	 * Drain queue processing first. A running queue worker may schedule the
+	 * delayed worker on its way out, so stop delayed_work only after the
+	 * regular work item has been cancelled and flushed.
 	 */
-	qdf_delayed_work_stop_sync(&ctx->delayed_work);
-	qdf_delayed_work_destroy(&ctx->delayed_work);
-
-	/* Cancel and drain any active injection send before vdev teardown. */
 	qdf_cancel_work(&ctx->queue_work);
 	qdf_flush_work(&ctx->queue_work);
+	qdf_delayed_work_stop_sync(&ctx->delayed_work);
 
-	/* Destroy hidden injection TX vdev only after sends are quiesced. */
-	status = wma_injection_destroy_tx_vdev(wma_handle, true);
-	if (QDF_IS_STATUS_ERROR(status))
-		wma_warn("Failed to destroy injection TX helper during WMA deinit: %d",
-			 status);
-
-	/* Stop and destroy reaper timer */
-	qdf_delayed_work_stop_sync(&ctx->reaper_work);
-	qdf_delayed_work_destroy(&ctx->reaper_work);
-
-	/* Clear the queue and free all nodes */
+	/*
+	 * Pending queue nodes contain host copies, not DMA-owned nbufs. They can
+	 * be discarded now; the in-flight cache is handled separately below.
+	 */
 	qdf_spin_lock_bh(&ctx->queue_lock);
-
 	while (!qdf_list_empty(&ctx->queue)) {
 		status = qdf_list_remove_front(&ctx->queue, &list_node);
 		if (QDF_IS_STATUS_ERROR(status)) {
@@ -1525,65 +1488,99 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 			break;
 		}
 
-		node = qdf_container_of(list_node, struct wma_injection_queue_node, node);
+		node = qdf_container_of(list_node, struct wma_injection_queue_node,
+					node);
 		wma_injection_queue_node_free(node);
 		dropped_count++;
 	}
-
 	ctx->queue_size = 0;
+	ctx->stats.frames_dropped += dropped_count;
 	qdf_spin_unlock_bh(&ctx->queue_lock);
 
-	/* Update statistics */
-	ctx->stats.frames_dropped += dropped_count;
+	/*
+	 * A missing completion cannot be repaired by an age-based free. Wait
+	 * briefly for real completions, then leave the queue/cache/locks alive
+	 * and return E_AGAIN. The caller may retry deinit after the controller
+	 * has completed or has been independently confirmed DMA-quiescent.
+	 */
+	while (qdf_atomic_read(&ctx->inflight_count) > 0 && wait_ms < 3500) {
+		msleep(20);
+		wait_ms += 20;
+	}
 
-	/* Destroy queue and lock */
-	qdf_list_destroy(&ctx->queue);
-	qdf_spinlock_destroy(&ctx->queue_lock);
-
-	/* Mark as uninitialized */
-	ctx->is_initialized = false;
-
-	wma_info("WMA injection queue deinitialized (dropped %u pending frames)",
-		 dropped_count);
+	inflight = qdf_atomic_read(&ctx->inflight_count);
+	if (inflight > 0) {
+		wma_warn("Deinit deferred: inflight=%d after %u ms; retaining DMA buffers and cache state",
+			 inflight, wait_ms);
+		return QDF_STATUS_E_AGAIN;
+	}
 
 	/*
-	 * Flush any in-flight nbufs still tracked in the debug cache.
-	 * These are frames submitted to firmware whose completions never
-	 * arrived before the queue was torn down.
+	 * Count and inspect actual pointers as well as inflight_count. Never
+	 * destroy the helper or cache lock if the two ownership indicators
+	 * disagree; a non-NULL nbuf remains device-owned until proven otherwise.
 	 */
-	{
-		uint32_t i;
-		uint32_t nbuf_leaked = 0;
-
-		for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
-			struct wma_injection_debug_info *e;
-			qdf_nbuf_t stale_buf = NULL;
-
-			qdf_spin_lock_bh(&g_wma_injection_cache_lock);
-			e = &g_wma_injection_debug_cache[i];
-			if (e->tx_buf) {
-				stale_buf = e->tx_buf;
-				e->tx_buf = NULL;
-				qdf_atomic_dec(&g_wma_injection_ctx.inflight_count);
-				nbuf_leaked++;
-			}
-			e->valid = false;
-			qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
-
-			if (stale_buf) {
-				wma_injection_unmap_tx_buf(stale_buf);
-				qdf_nbuf_free(stale_buf);
-			}
-		}
-		if (nbuf_leaked)
-			wma_warn("Freed %u leaked injection nbufs during deinit",
-				 nbuf_leaked);
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
+		if (g_wma_injection_debug_cache[i].tx_buf)
+			active_bufs++;
 	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	if (active_bufs) {
+		wma_warn("Deinit deferred: inflight_count is zero but %u DMA buffer pointer(s) remain; retaining cache state",
+			 active_bufs);
+		return QDF_STATUS_E_BUSY;
+	}
+
+	/*
+	 * No tracked DMA remains. Only now may the helper VDEV be destroyed.
+	 * If WMI teardown fails, keep the synchronization/cache objects intact
+	 * so teardown can be retried safely.
+	 */
+	status = wma_injection_destroy_tx_vdev(wma_handle, true);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		wma_warn("Injection helper teardown incomplete (%d); retaining queue/cache state",
+			 status);
+		return status;
+	}
+
+	/* No active buffer can be reclaimed here; all pointers were verified NULL. */
+	qdf_delayed_work_stop_sync(&ctx->reaper_work);
+	qdf_delayed_work_destroy(&ctx->reaper_work);
+	qdf_delayed_work_destroy(&ctx->delayed_work);
+
+	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
+	for (i = 0; i < WMA_INJECTION_DEBUG_CACHE_SIZE; i++) {
+		struct wma_injection_debug_info *e =
+			&g_wma_injection_debug_cache[i];
+
+		/* Do not free here: this block is metadata-only after the NULL check. */
+		e->valid = false;
+		e->submit_pending = false;
+		e->completion_pending = false;
+		e->completion_status = 0;
+		e->desc_id = 0;
+		e->tx_buf = NULL;
+		e->submit_ts = 0;
+		e->reaper_warned = false;
+	}
+	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
+
+	/* Destroy queue and lock only after DMA ownership has fully drained. */
+	qdf_list_destroy(&ctx->queue);
+	qdf_spinlock_destroy(&ctx->queue_lock);
 	qdf_spinlock_destroy(&g_wma_injection_cache_lock);
+	ctx->is_initialized = false;
+
+	wma_info("WMA injection queue deinitialized (dropped %u pending frames; DMA drained)",
+		 dropped_count);
 
 	return QDF_STATUS_SUCCESS;
 }
 
+
+QDF_STATUS wma_queue_injection_frame(
 QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 				     struct inject_frame_req *req,
 				     uint8_t vdev_id)
@@ -2031,8 +2028,16 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * override this; the log below records the requested setting.
 	 */
 	mgmt_params.use_6mbps = (monitor_vdev && !req->tx_rate) ? 1 : 0;
-	wma_injection_debug_cache_update(mgmt_params.desc_id, req, fc_type,
-					 fc_subtype, mgmt_params.chanfreq);
+	status = wma_injection_debug_cache_update(mgmt_params.desc_id, req,
+						  fc_type, fc_subtype,
+						  mgmt_params.chanfreq);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_nbuf_free(wmi_buf);
+		if (status != QDF_STATUS_E_AGAIN)
+			wma_err("Injection: cannot reserve debug cache slot for desc_id=%u: %d",
+				mgmt_params.desc_id, status);
+		return status;
+	}
 
 	/* Set transmission rate if specified in injection request */
 	if (req->tx_rate != 0) {
