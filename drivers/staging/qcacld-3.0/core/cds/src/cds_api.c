@@ -1199,9 +1199,10 @@ QDF_STATUS cds_disable(struct wlan_objmgr_psoc *psoc)
 	qdf_status = wma_stop();
 
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		cds_err("Failed to stop wma");
-		QDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+		cds_err("Failed to stop wma: %d", qdf_status);
 		wma_setneedshutdown();
+		/* Keep UMAC/WMI completion handlers alive until DMA is quiesced. */
+		return qdf_status;
 	}
 
 	handle = cds_get_context(QDF_MODULE_ID_PE);
