@@ -12,6 +12,8 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/pm_opp.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 #include <linux/energy_model.h>
 #include <linux/sched.h>
 #include <linux/cpu_cooling.h>
@@ -66,8 +68,21 @@ struct skipped_freq {
 	spinlock_t lock;
 };
 
+struct qcom_cpufreq_lut_entry {
+	u32 raw_freq;
+	u32 raw_volt;
+	u32 src;
+	u32 lval;
+	u32 core_count;
+	u32 vc;
+	u32 frequency;
+	u32 voltage;
+};
+
 struct cpufreq_qcom {
 	struct cpufreq_frequency_table *table;
+	struct qcom_cpufreq_lut_entry *lut_dump;
+	unsigned int lut_dump_count;
 	void __iomem *reg_bases[REG_ARRAY_SIZE];
 	cpumask_t related_cpus;
 	unsigned int max_cores;
@@ -121,8 +136,47 @@ static const u16 cpufreq_qcom_epss_std_offsets[REG_ARRAY_SIZE] = {
 
 static struct cpufreq_counter qcom_cpufreq_counter[NR_CPUS];
 static struct cpufreq_qcom *qcom_freq_domain_map[NR_CPUS];
+static struct cpufreq_qcom *qcom_lut_domain_map[3];
+static struct proc_dir_entry *qcom_lut_dump_proc;
 
 static unsigned int qcom_cpufreq_hw_get(unsigned int cpu);
+
+static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
+{
+	static const char * const domain_names[] = {
+		"Silver", "Gold", "Prime",
+	};
+	struct cpufreq_qcom *c;
+	struct qcom_cpufreq_lut_entry *entry;
+	unsigned int domain, row;
+
+	seq_puts(m, "EPSS CPU frequency/voltage LUT snapshot (read-only)\n");
+
+	for (domain = 0; domain < ARRAY_SIZE(qcom_lut_domain_map); domain++) {
+		c = qcom_lut_domain_map[domain];
+		if (!c || !c->lut_dump) {
+			seq_printf(m, "Domain: %u (%s) - unavailable\n",
+				   domain, domain_names[domain]);
+			continue;
+		}
+
+		seq_printf(m, "\nDomain: %u (%s), Rows: %u\n",
+			   domain, domain_names[domain], c->lut_dump_count);
+		seq_puts(m, "Row Freq_kHz Volt_uV src lval core_count vc "
+			      "RawFreqReg RawVoltReg\n");
+
+		for (row = 0; row < c->lut_dump_count; row++) {
+			entry = &c->lut_dump[row];
+			seq_printf(m,
+				   "%u %u %u %u %u %u %u 0x%08x 0x%08x\n",
+				   row, entry->frequency, entry->voltage,
+				   entry->src, entry->lval, entry->core_count,
+				   entry->vc, entry->raw_freq, entry->raw_volt);
+		}
+	}
+
+	return 0;
+}
 
 static ssize_t dcvsh_freq_limit_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -446,9 +500,10 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 				    struct cpufreq_qcom *c)
 {
 	struct device *dev = &pdev->dev, *cpu_dev;
+	struct qcom_cpufreq_lut_entry *lut_entry;
 	void __iomem *base_freq, *base_volt;
-	u32 data, src, lval, i, core_count, prev_cc, prev_freq, cur_freq, volt;
-	u32 vc, raw_freq, raw_volt, last_volt = 0;
+	u32 i, core_count, prev_cc, prev_freq, cur_freq, volt;
+	u32 last_volt = 0;
 	unsigned long cpu;
 
 	c->table = devm_kcalloc(dev, lut_max_entries + 1,
@@ -460,24 +515,46 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	base_freq = c->reg_bases[REG_FREQ_LUT_TABLE];
 	base_volt = c->reg_bases[REG_VOLT_LUT_TABLE];
 
+	/*
+	 * Preserve every hardware LUT row before the cpufreq table parser
+	 * applies its duplicate-frequency termination rule.  The snapshot is
+	 * read-only and remains available through procfs independently of
+	 * the kernel log ring buffer.
+	 */
+	c->lut_dump = devm_kcalloc(dev, lut_max_entries,
+				   sizeof(*c->lut_dump), GFP_KERNEL);
+	if (!c->lut_dump)
+		return -ENOMEM;
+
+	c->lut_dump_count = lut_max_entries;
+	for (i = 0; i < c->lut_dump_count; i++) {
+		lut_entry = &c->lut_dump[i];
+		lut_entry->raw_freq =
+			readl_relaxed(base_freq + i * lut_row_size);
+		lut_entry->raw_volt =
+			readl_relaxed(base_volt + i * lut_row_size);
+		lut_entry->src =
+			(lut_entry->raw_freq & GENMASK(31, 30)) >> 30;
+		lut_entry->lval = lut_entry->raw_freq & GENMASK(7, 0);
+		lut_entry->core_count = CORE_COUNT_VAL(lut_entry->raw_freq);
+		lut_entry->voltage =
+			(lut_entry->raw_volt & GENMASK(11, 0)) * 1000;
+		lut_entry->vc = lut_entry->raw_volt & GENMASK(21, 16);
+
+		if (lut_entry->src)
+			lut_entry->frequency =
+				c->xo_rate * lut_entry->lval / 1000;
+		else
+			lut_entry->frequency = c->cpu_hw_rate / 1000;
+	}
+
 	prev_cc = 0;
 
 	for (i = 0; i < lut_max_entries; i++) {
-		raw_freq = readl_relaxed(base_freq + i * lut_row_size);
-		data = raw_freq;
-		src = (data & GENMASK(31, 30)) >> 30;
-		lval = data & GENMASK(7, 0);
-		core_count = CORE_COUNT_VAL(data);
-
-		raw_volt = readl_relaxed(base_volt + i * lut_row_size);
-		data = raw_volt;
-		volt = (data & GENMASK(11, 0)) * 1000;
-		vc = data & GENMASK(21, 16);
-
-		if (src)
-			c->table[i].frequency = c->xo_rate * lval / 1000;
-		else
-			c->table[i].frequency = c->cpu_hw_rate / 1000;
+		lut_entry = &c->lut_dump[i];
+		core_count = lut_entry->core_count;
+		volt = lut_entry->voltage;
+		c->table[i].frequency = lut_entry->frequency;
 
 		cur_freq = c->table[i].frequency;
 
@@ -518,9 +595,6 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 			break;
 		}
 
-		pr_info("[CPU_LUT_DUMP] Domain: %u, Row: %u, Freq: %u kHz, Volt: %u uV, RawFreqReg: 0x%08x, RawVoltReg: 0x%08x\n",
-			c->domain_id, i, c->table[i].frequency, volt,
-			raw_freq, raw_volt);
 		last_volt = volt;
 
 		prev_cc = core_count;
@@ -537,11 +611,6 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 
 	c->lut_max_entries = i;
 	c->table[i].frequency = CPUFREQ_TABLE_END;
-
-	if (i)
-		pr_info("[CPU_LUT_DUMP] Domain %u initialized with %u total valid rows. Max Freq: %u kHz, Max Volt: %u uV\n",
-			c->domain_id, i, c->table[i - 1].frequency,
-			last_volt);
 
 	if (c->skip_data.skip) {
 		pr_info("%s Skip: Index[%u], Frequency[%u], Core Count %u, Final Index %u Actual Index %u Prev_Freq[%u] Prev_Index[%u] Prev_CC[%u]\n",
@@ -656,6 +725,9 @@ static int qcom_cpu_resources_init(struct platform_device *pdev,
 
 	for_each_cpu(cpu_r, &c->related_cpus)
 		qcom_freq_domain_map[cpu_r] = c;
+
+	if (index < ARRAY_SIZE(qcom_lut_domain_map))
+		qcom_lut_domain_map[index] = c;
 
 	return 0;
 }
@@ -848,6 +920,16 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	if (rc) {
 		dev_err(&pdev->dev, "CPUFreq resource init failed\n");
 		return rc;
+	}
+
+	if (!qcom_lut_dump_proc) {
+		qcom_lut_dump_proc = proc_create_single_data("cpu_lut_dump",
+				0444, NULL, qcom_cpufreq_lut_dump_show, NULL);
+		if (!qcom_lut_dump_proc) {
+			dev_err(&pdev->dev,
+				"Failed to create /proc/cpu_lut_dump\n");
+			return -ENOMEM;
+		}
 	}
 
 	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
