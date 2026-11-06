@@ -1429,8 +1429,8 @@ netdev_tx_t hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 	if (osif_vdev_sync_op_start(net_dev, &vdev_sync)) {
 #ifdef FEATURE_FRAME_INJECTION_SUPPORT
 		if (hdd_is_monitor_tx_dev(adapter, net_dev)) {
-			pr_err("[INJECT_ERR] osif_vdev_sync_op_start failed on %s!\n",
-			       net_dev ? net_dev->name : "null");
+			pr_err_ratelimited("[INJECT_ERR] osif_vdev_sync_op_start failed on %s!\n",
+					   net_dev ? net_dev->name : "null");
 		} else {
 			hdd_debug_rl("Operation on net_dev is not permitted");
 		}

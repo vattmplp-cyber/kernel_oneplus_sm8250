@@ -88,15 +88,16 @@ static inline void wma_injection_unmap_tx_buf(qdf_nbuf_t buf)
 
 /*
  * Maximum age (in microseconds, QDF log-timestamp units) before an
- * in-flight nbuf is considered abandoned by firmware and reaped.
- * 2 seconds is generous — normal completions arrive in < 50 ms.
+ * in-flight nbuf without a firmware completion is considered stale.
+ * This is a conservative fallback for the helper vdev's missing completion
+ * path; it is not a substitute for a hardware DMA-quiescence guarantee.
  */
-#define WMA_INJECTION_NBUF_TIMEOUT_US      2000000ULL
+#define WMA_INJECTION_NBUF_TIMEOUT_US      10000000ULL
 
 /*
- * Maximum number of in-flight (submitted but uncomplemented) nbufs before
- * we start rejecting new enqueue requests.  Keeps DMA-mapped memory bounded
- * when firmware silently drops completions for the helper STA vdev.
+ * Maximum number of DMA-owned injection nbufs. Admission is reserved
+ * atomically under g_wma_injection_cache_lock immediately before WMI submit,
+ * leaving headroom below the 256-slot descriptor cache.
  */
 #define WMA_INJECTION_INFLIGHT_HIGH        200
 
@@ -163,6 +164,11 @@ static bool inject_patch_banner_logged;
  * correlated with the frame metadata for the corresponding desc_id.
  */
 #define WMA_INJECTION_DEBUG_CACHE_SIZE 256
+
+#if WMA_INJECTION_INFLIGHT_HIGH >= WMA_INJECTION_DEBUG_CACHE_SIZE
+#error "WMA injection inflight limit must be below debug cache capacity"
+#endif
+
 struct wma_injection_debug_info {
 	bool valid;
 	bool submit_pending;
@@ -822,32 +828,46 @@ wma_injection_debug_cache_get(uint32_t desc_id,
  * the send call returns. An early completion only marks the entry; this
  * submit-done helper then takes ownership of the buffer.
  */
-static bool
+static QDF_STATUS
 wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
 {
 	struct wma_injection_debug_info *entry;
 	uint32_t slot;
-	bool found = false;
+	QDF_STATUS status = QDF_STATUS_E_FAILURE;
 
 	if (!desc_id || !tx_buf)
-		return false;
+		return QDF_STATUS_E_INVAL;
 
 	slot = desc_id % WMA_INJECTION_DEBUG_CACHE_SIZE;
 
 	qdf_spin_lock_bh(&g_wma_injection_cache_lock);
 	entry = &g_wma_injection_debug_cache[slot];
 	if (entry->valid && entry->desc_id == desc_id && !entry->tx_buf) {
-		entry->tx_buf = tx_buf;
-		entry->submit_pending = true;
-		entry->completion_pending = false;
-		entry->completion_status = 0;
-		entry->submit_ts = 0;
-		qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
-		found = true;
+		/*
+		 * Reserve the DMA slot and increment inflight_count under the
+		 * same lock. This closes the race between concurrent submitters
+		 * and guarantees the active count never exceeds the cache-safe
+		 * admission limit.
+		 */
+		if (qdf_atomic_read(&g_wma_injection_ctx.inflight_count) >=
+		    WMA_INJECTION_INFLIGHT_HIGH) {
+			status = QDF_STATUS_E_AGAIN;
+		} else {
+			entry->tx_buf = tx_buf;
+			entry->submit_pending = true;
+			entry->completion_pending = false;
+			entry->completion_status = 0;
+			entry->submit_ts = 0;
+			qdf_atomic_inc(&g_wma_injection_ctx.inflight_count);
+			status = QDF_STATUS_SUCCESS;
+		}
+	} else if (entry->valid && entry->desc_id != desc_id) {
+		/* A live descriptor owns this ring slot; retry after it drains. */
+		status = QDF_STATUS_E_AGAIN;
 	}
 	qdf_spin_unlock_bh(&g_wma_injection_cache_lock);
 
-	return found;
+	return status;
 }
 
 static bool
@@ -1254,8 +1274,11 @@ static void wma_process_injection_queue_work(void *arg)
 	/* Process the queue */
 	status = wma_process_injection_queue(wma_handle);
 	if (status == QDF_STATUS_E_AGAIN) {
-		/* Traffic coordination is temporarily blocking TX; back off. */
-		qdf_delayed_work_start(&ctx->delayed_work, 100);
+		/*
+		 * Yield to completions/reaper and retry without dropping the
+		 * head-of-line frame or spinning the workqueue.
+		 */
+		qdf_delayed_work_start(&ctx->delayed_work, 10);
 		return;
 	}
 	if (QDF_IS_STATUS_ERROR(status))
@@ -1313,7 +1336,7 @@ static void wma_process_injection_queue_delayed_work(void *context)
  *
  * This worker runs every WMA_INJECTION_REAPER_INTERVAL_MS (1 s), scans the
  * debug cache, and frees any entry whose submit_ts is older than
- * WMA_INJECTION_NBUF_TIMEOUT_US (2 s).
+ * WMA_INJECTION_NBUF_TIMEOUT_US (10 s).
  */
 static void wma_injection_reaper_work_cb(void *context)
 {
@@ -1611,22 +1634,10 @@ QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 	qdf_spin_unlock_bh(&ctx->queue_lock);
 
 	/*
-	 * Inflight backpressure: if too many nbufs are waiting for FW
-	 * completions that will never arrive, reject early to avoid
-	 * exhausting DMA-mapped memory and triggering an SMMU fault.
-	 * The reaper timer will gradually free the stale entries.
+	 * DMA in-flight admission is reserved atomically immediately before
+	 * WMI submission. Keep frames queued while that window is full so the
+	 * worker can apply backpressure and retry instead of dropping frames.
 	 */
-	{
-		int inflight = qdf_atomic_read(&ctx->inflight_count);
-
-		if (inflight >= WMA_INJECTION_INFLIGHT_HIGH) {
-			ctx->stats.frames_dropped++;
-			if (ctx->stats.frames_dropped % 100 == 1)
-				wma_warn("Injection backpressure: inflight=%d >= %d, dropping frame",
-					 inflight, WMA_INJECTION_INFLIGHT_HIGH);
-			return QDF_STATUS_E_RESOURCES;
-		}
-	}
 
 	/* Allocate and initialize queue node */
 	node = wma_injection_queue_node_alloc(req, vdev_id);
@@ -2110,18 +2121,21 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	}
 
 	/*
-	 * Publish the buffer before WMI submission so an immediate firmware
-	 * completion can always claim and release the DMA mapping. If the cache
-	 * entry is missing, do not submit an untracked buffer to firmware.
+	 * Publish and reserve the buffer before WMI submission so an immediate
+	 * firmware completion can claim it and the in-flight count cannot race
+	 * past the 200-buffer admission limit. If capacity is exhausted, leave
+	 * the frame queued for a delayed retry; never submit an untracked nbuf.
 	 */
-	if (!wma_injection_debug_cache_set_tx_buf(mgmt_params.desc_id,
-						  wmi_buf)) {
-		wma_err("Injection: cannot attach TX buffer to cache for desc_id=%u",
-			mgmt_params.desc_id);
+	status = wma_injection_debug_cache_set_tx_buf(mgmt_params.desc_id,
+						      wmi_buf);
+	if (QDF_IS_STATUS_ERROR(status)) {
 		wma_injection_debug_cache_get(mgmt_params.desc_id,
 					      &failed_tx_snapshot, false, 0);
 		qdf_nbuf_free(wmi_buf);
-		return QDF_STATUS_E_FAILURE;
+		if (status != QDF_STATUS_E_AGAIN)
+			wma_err("Injection: cannot reserve TX cache slot for desc_id=%u",
+				mgmt_params.desc_id);
+		return status;
 	}
 
 	status = wmi_mgmt_unified_cmd_send(wma_handle->wmi_handle, &mgmt_params);
