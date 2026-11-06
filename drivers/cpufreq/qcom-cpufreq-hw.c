@@ -71,6 +71,7 @@ struct cpufreq_qcom {
 	void __iomem *reg_bases[REG_ARRAY_SIZE];
 	cpumask_t related_cpus;
 	unsigned int max_cores;
+	unsigned int domain_id;
 	unsigned int lut_max_entries;
 	unsigned long xo_rate;
 	unsigned long cpu_hw_rate;
@@ -447,7 +448,7 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	struct device *dev = &pdev->dev, *cpu_dev;
 	void __iomem *base_freq, *base_volt;
 	u32 data, src, lval, i, core_count, prev_cc, prev_freq, cur_freq, volt;
-	u32 vc;
+	u32 vc, raw_freq, raw_volt, last_volt = 0;
 	unsigned long cpu;
 
 	c->table = devm_kcalloc(dev, lut_max_entries + 1,
@@ -462,12 +463,14 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	prev_cc = 0;
 
 	for (i = 0; i < lut_max_entries; i++) {
-		data = readl_relaxed(base_freq + i * lut_row_size);
+		raw_freq = readl_relaxed(base_freq + i * lut_row_size);
+		data = raw_freq;
 		src = (data & GENMASK(31, 30)) >> 30;
 		lval = data & GENMASK(7, 0);
 		core_count = CORE_COUNT_VAL(data);
 
-		data = readl_relaxed(base_volt + i * lut_row_size);
+		raw_volt = readl_relaxed(base_volt + i * lut_row_size);
+		data = raw_volt;
 		volt = (data & GENMASK(11, 0)) * 1000;
 		vc = data & GENMASK(21, 16);
 
@@ -515,6 +518,11 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 			break;
 		}
 
+		pr_info("[CPU_LUT_DUMP] Domain: %u, Row: %u, Freq: %u kHz, Volt: %u uV, RawFreqReg: 0x%08x, RawVoltReg: 0x%08x\n",
+			c->domain_id, i, c->table[i].frequency, volt,
+			raw_freq, raw_volt);
+		last_volt = volt;
+
 		prev_cc = core_count;
 		prev_freq = cur_freq;
 
@@ -529,6 +537,11 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 
 	c->lut_max_entries = i;
 	c->table[i].frequency = CPUFREQ_TABLE_END;
+
+	if (i)
+		pr_info("[CPU_LUT_DUMP] Domain %u initialized with %u total valid rows. Max Freq: %u kHz, Max Volt: %u uV\n",
+			c->domain_id, i, c->table[i - 1].frequency,
+			last_volt);
 
 	if (c->skip_data.skip) {
 		pr_info("%s Skip: Index[%u], Frequency[%u], Core Count %u, Final Index %u Actual Index %u Prev_Freq[%u] Prev_Index[%u] Prev_CC[%u]\n",
@@ -618,6 +631,7 @@ static int qcom_cpu_resources_init(struct platform_device *pdev,
 		return ret;
 	}
 
+	c->domain_id = index;
 	c->max_cores = max_cores;
 	if (!c->max_cores)
 		return -ENOENT;
