@@ -18419,6 +18419,7 @@ QDF_STATUS hdd_monitor_mode_qdf_create_event(struct hdd_adapter *adapter,
 	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
 
 	if (session_type == QDF_MONITOR_MODE) {
+		adapter->monitor_mode_vdev_up_status = QDF_STATUS_SUCCESS;
 		qdf_status = qdf_event_create(
 				&adapter->qdf_monitor_mode_vdev_up_event);
 	}
@@ -18430,7 +18431,7 @@ QDF_STATUS hdd_monitor_mode_vdev_status(struct hdd_adapter *adapter)
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
 	if (!adapter->monitor_mode_vdev_up_in_progress)
-		return status;
+		return adapter->monitor_mode_vdev_up_status;
 
 	/* block on a completion variable until vdev up success*/
 	status = qdf_wait_for_event_completion(
