@@ -503,7 +503,6 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	struct qcom_cpufreq_lut_entry *lut_entry;
 	void __iomem *base_freq, *base_volt;
 	u32 i, core_count, prev_cc, prev_freq, cur_freq, volt;
-	u32 last_volt = 0;
 	unsigned long cpu;
 
 	c->table = devm_kcalloc(dev, lut_max_entries + 1,
@@ -595,7 +594,6 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 			break;
 		}
 
-		last_volt = volt;
 
 		prev_cc = core_count;
 		prev_freq = cur_freq;
@@ -922,16 +920,6 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	if (!qcom_lut_dump_proc) {
-		qcom_lut_dump_proc = proc_create_single_data("cpu_lut_dump",
-				0444, NULL, qcom_cpufreq_lut_dump_show, NULL);
-		if (!qcom_lut_dump_proc) {
-			dev_err(&pdev->dev,
-				"Failed to create /proc/cpu_lut_dump\n");
-			return -ENOMEM;
-		}
-	}
-
 	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
 	if (rc) {
 		dev_err(&pdev->dev, "CPUFreq HW driver failed to register\n");
@@ -951,6 +939,18 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
 
 	cpufreq_hw_register_cooling_device(pdev);
+
+	/*
+	 * Publish the immutable LUT snapshots only after all domain resources
+	 * and cpufreq registration have completed successfully.
+	 */
+	if (!qcom_lut_dump_proc) {
+		qcom_lut_dump_proc = proc_create_single_data("cpu_lut_dump",
+				0444, NULL, qcom_cpufreq_lut_dump_show, NULL);
+		if (!qcom_lut_dump_proc)
+			dev_warn(&pdev->dev,
+				 "Failed to create /proc/cpu_lut_dump\n");
+	}
 
 	return 0;
 }
