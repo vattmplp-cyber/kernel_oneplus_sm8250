@@ -135,10 +135,13 @@ QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle);
  * wma_deinit_injection_queue() - Deinitialize WMA injection queue
  * @wma_handle: WMA handle
  *
- * This function cleans up the injection queue infrastructure. It flushes any
- * pending frames, cancels work items, and frees allocated resources.
+ * This function pauses the queue and drains pending work. DMA-owned nbufs
+ * are never freed based only on age. If firmware completion does not drain
+ * the outstanding buffers, it returns QDF_STATUS_E_AGAIN and retains the
+ * queue/cache synchronization state so the caller can retry safely.
  *
- * Return: QDF_STATUS_SUCCESS on success, error code on failure
+ * Return: QDF_STATUS_SUCCESS when fully drained, QDF_STATUS_E_AGAIN while
+ *         DMA remains outstanding, or another error on teardown failure
  */
 QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle);
 
