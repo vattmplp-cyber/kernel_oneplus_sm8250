@@ -27,6 +27,8 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/jiffies.h>
+#include <linux/spinlock.h>
 #include <linux/etherdevice.h>
 #include <linux/wireless.h>
 #include <linux/cred.h>
@@ -24181,6 +24183,9 @@ int wlan_hdd_change_hw_mode_for_given_chnl(struct hdd_adapter *adapter,
 }
 
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
+static DEFINE_SPINLOCK(mon_ch_switch_lock);
+static unsigned long last_mon_ch_switch_jiffies;
+
 /**
  * wlan_hdd_cfg80211_get_channel() - Report current operating channel
  * @wiphy: wiphy handle
@@ -24269,9 +24274,21 @@ static int __wlan_hdd_cfg80211_set_mon_ch(struct wiphy *wiphy,
 	struct csr_roam_profile roam_profile;
 	struct ch_params ch_params;
 	int ret;
+	unsigned long now, flags;
 	enum channel_state chan_freq_state;
 	uint8_t max_fw_bw;
 	enum phy_ch_width ch_width;
+
+	now = jiffies;
+	spin_lock_irqsave(&mon_ch_switch_lock, flags);
+	if (last_mon_ch_switch_jiffies &&
+	    time_before(now, last_mon_ch_switch_jiffies +
+			msecs_to_jiffies(350))) {
+		spin_unlock_irqrestore(&mon_ch_switch_lock, flags);
+		return -EBUSY;
+	}
+	last_mon_ch_switch_jiffies = now;
+	spin_unlock_irqrestore(&mon_ch_switch_lock, flags);
 
 	hdd_enter();
 
