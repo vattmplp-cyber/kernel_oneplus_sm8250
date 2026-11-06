@@ -24285,6 +24285,11 @@ static int __wlan_hdd_cfg80211_set_mon_ch(struct wiphy *wiphy,
 	if (!adapter)
 		return -EIO;
 
+	if (adapter->monitor_mode_vdev_up_in_progress) {
+		hdd_err_rl("monitor mode vdev up in progress");
+		return -EBUSY;
+	}
+
 	hdd_debug("%s: set monitor mode freq %d",
 		  adapter->dev->name, chandef->chan->center_freq);
 
@@ -24341,16 +24346,12 @@ static int __wlan_hdd_cfg80211_set_mon_ch(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
-	if (adapter->monitor_mode_vdev_up_in_progress) {
-		hdd_err_rl("monitor mode vdev up in progress");
-		return -EBUSY;
-	}
-
 	status = qdf_event_reset(&adapter->qdf_monitor_mode_vdev_up_event);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err_rl("failed to reinit monitor mode vdev up event");
 		return qdf_status_to_os_return(status);
 	}
+	adapter->monitor_mode_vdev_up_status = QDF_STATUS_SUCCESS;
 	adapter->monitor_mode_vdev_up_in_progress = true;
 
 	status = sme_roam_channel_change_req(mac_handle, bssid,
@@ -24384,6 +24385,13 @@ static int __wlan_hdd_cfg80211_set_mon_ch(struct wiphy *wiphy,
 				  status);
 
 		adapter->monitor_mode_vdev_up_in_progress = false;
+		return qdf_status_to_os_return(status);
+	}
+
+	if (QDF_IS_STATUS_ERROR(adapter->monitor_mode_vdev_up_status)) {
+		status = adapter->monitor_mode_vdev_up_status;
+		hdd_err_rl("monitor mode channel change failed(status-%d)",
+			   status);
 		return qdf_status_to_os_return(status);
 	}
 

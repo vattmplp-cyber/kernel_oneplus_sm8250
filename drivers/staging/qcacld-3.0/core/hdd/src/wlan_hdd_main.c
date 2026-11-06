@@ -8018,6 +8018,11 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 	enum phy_ch_width ch_width;
 	int ret;
 
+	if (adapter->monitor_mode_vdev_up_in_progress) {
+		hdd_err_rl("monitor mode vdev up in progress");
+		return -EBUSY;
+	}
+
 	if (hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE) {
 		hdd_err("Not supported, device is not in monitor mode");
 		return -EINVAL;
@@ -8076,16 +8081,12 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 		return -EINVAL;
 	}
 
-	if (adapter->monitor_mode_vdev_up_in_progress) {
-		hdd_err_rl("monitor mode vdev up in progress");
-		return -EBUSY;
-	}
-
 	status = qdf_event_reset(&adapter->qdf_monitor_mode_vdev_up_event);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err_rl("failed to reinit monitor mode vdev up event");
 		return qdf_status_to_os_return(status);
 	}
+	adapter->monitor_mode_vdev_up_status = QDF_STATUS_SUCCESS;
 	adapter->monitor_mode_vdev_up_in_progress = true;
 
 	status = sme_roam_channel_change_req(hdd_ctx->mac_handle,
@@ -8098,10 +8099,7 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 		return qdf_status_to_os_return(status);
 	}
 
-	adapter->mon_chan_freq = freq;
-	adapter->mon_bandwidth = bandwidth;
-
-	/* block on a completion variable until vdev up success*/
+	/* block on a completion variable until vdev up completion */
 	status = qdf_wait_for_event_completion(
 				       &adapter->qdf_monitor_mode_vdev_up_event,
 					WLAN_MONITOR_MODE_VDEV_UP_EVT);
@@ -8121,7 +8119,18 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 				  status);
 
 		adapter->monitor_mode_vdev_up_in_progress = false;
+		return qdf_status_to_os_return(status);
 	}
+
+	if (QDF_IS_STATUS_ERROR(adapter->monitor_mode_vdev_up_status)) {
+		status = adapter->monitor_mode_vdev_up_status;
+		hdd_err_rl("monitor mode channel change failed(status-%d)",
+			   status);
+		return qdf_status_to_os_return(status);
+	}
+
+	adapter->mon_chan_freq = freq;
+	adapter->mon_bandwidth = bandwidth;
 
 	return qdf_status_to_os_return(status);
 }
@@ -18372,7 +18381,7 @@ wlan_hdd_add_monitor_check(struct hdd_context *hdd_ctx,
 
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
 
-void hdd_sme_monitor_mode_callback(uint8_t vdev_id)
+void hdd_sme_monitor_mode_callback(uint8_t vdev_id, QDF_STATUS status)
 {
 	struct hdd_adapter *adapter;
 	struct hdd_context *hdd_ctx;
@@ -18394,10 +18403,13 @@ void hdd_sme_monitor_mode_callback(uint8_t vdev_id)
 		return;
 	}
 
-	if (adapter->magic == WLAN_HDD_ADAPTER_MAGIC)
-		qdf_event_set(&adapter->qdf_monitor_mode_vdev_up_event);
+	adapter->monitor_mode_vdev_up_status = status;
+	if (QDF_IS_STATUS_SUCCESS(status))
+		hdd_debug("monitor mode vdev up completed");
+	else
+		hdd_err("monitor mode vdev up failed(status-%d)", status);
 
-	hdd_debug("monitor mode vdev up completed");
+	qdf_event_set(&adapter->qdf_monitor_mode_vdev_up_event);
 	adapter->monitor_mode_vdev_up_in_progress = false;
 }
 
@@ -18442,6 +18454,9 @@ QDF_STATUS hdd_monitor_mode_vdev_status(struct hdd_adapter *adapter)
 		adapter->monitor_mode_vdev_up_in_progress = false;
 		return status;
 	}
+
+	if (QDF_IS_STATUS_ERROR(adapter->monitor_mode_vdev_up_status))
+		return adapter->monitor_mode_vdev_up_status;
 
 	return QDF_STATUS_SUCCESS;
 }

@@ -4882,7 +4882,18 @@ static void lim_mon_change_channel(
 					      sizeof(*session_entry),
 					      session_entry);
 	} else {
+		struct scheduler_msg message = {0};
+
 		pe_err("Invalid vdev state to change channel");
+		message.type = eWNI_SME_MONITOR_MODE_VDEV_UP;
+		/* Bit 8 marks failure; keep the vdev id in the low byte. */
+		message.bodyval = (1U << 8) | session_entry->vdev_id;
+		if (QDF_STATUS_SUCCESS !=
+		    scheduler_post_message(QDF_MODULE_ID_PE,
+					   QDF_MODULE_ID_SME,
+					   QDF_MODULE_ID_SME,
+					   &message))
+			pe_err("Failed to post monitor mode vdev up failure");
 	}
 }
 

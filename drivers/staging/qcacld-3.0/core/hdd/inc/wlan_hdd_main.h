@@ -1431,6 +1431,7 @@ struct hdd_adapter {
 	uint16_t latency_level;
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
 	bool monitor_mode_vdev_up_in_progress;
+	QDF_STATUS monitor_mode_vdev_up_status;
 #endif
 	/* rcpi information */
 	struct rcpi_info rcpi;
@@ -4735,14 +4736,15 @@ static inline void hdd_sta_destroy_ctx_all(struct hdd_context *hdd_ctx)
 
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
 
-void hdd_sme_monitor_mode_callback(uint8_t vdev_id);
+void hdd_sme_monitor_mode_callback(uint8_t vdev_id, QDF_STATUS status);
 
 QDF_STATUS hdd_monitor_mode_vdev_status(struct hdd_adapter *adapter);
 
 QDF_STATUS hdd_monitor_mode_qdf_create_event(struct hdd_adapter *adapter,
 					     uint8_t session_type);
 #else
-static inline void hdd_sme_monitor_mode_callback(uint8_t vdev_id) {}
+static inline void
+hdd_sme_monitor_mode_callback(uint8_t vdev_id, QDF_STATUS status) {}
 
 static inline QDF_STATUS
 hdd_monitor_mode_vdev_status(struct hdd_adapter *adapter)

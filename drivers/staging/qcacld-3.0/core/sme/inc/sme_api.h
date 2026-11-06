@@ -4180,25 +4180,27 @@ QDF_STATUS sme_get_prev_connected_bss_ies(mac_handle_t mac_handle,
  * Return: QDF_STATUS
  */
 QDF_STATUS sme_set_monitor_mode_cb(mac_handle_t mac_handle,
-				   void (*monitor_mode_cb)(uint8_t vdev_id));
+				   void (*monitor_mode_cb)(uint8_t vdev_id,
+							   QDF_STATUS status));
 
 /*
  * sme_process_monitor_mode_vdev_up_evt() - Handle vdev up completion
- * @vdev_id: vdev id
+ * @event: packed vdev id and completion status from the scheduler message
  *
  * Return: QDF_STATUS.
  */
-QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id);
+QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint32_t event);
 #else
 static inline
 QDF_STATUS sme_set_monitor_mode_cb(mac_handle_t mac_handle,
-				   void (*monitor_mode_cb)(uint8_t vdev_id))
+				   void (*monitor_mode_cb)(uint8_t vdev_id,
+							   QDF_STATUS status))
 {
 	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS
-sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id)
+sme_process_monitor_mode_vdev_up_evt(uint32_t event)
 {
 	return QDF_STATUS_E_FAILURE;
 }

@@ -16447,10 +16447,14 @@ QDF_STATUS sme_set_monitor_mode_cb(mac_handle_t mac_handle,
 	return qdf_status;
 }
 
-QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id)
+QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint32_t event)
 {
 	mac_handle_t mac_handle;
 	struct mac_context *mac;
+	uint8_t vdev_id = event & 0xff;
+	/* Bit 8 marks failure; the low byte carries the vdev id. */
+	QDF_STATUS status = event & 0x100 ?
+		QDF_STATUS_E_FAILURE : QDF_STATUS_SUCCESS;
 
 	mac_handle = cds_get_context(QDF_MODULE_ID_SME);
 	if (!mac_handle) {
@@ -16461,7 +16465,7 @@ QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id)
 	mac = MAC_CONTEXT(mac_handle);
 
 	if (mac->sme.monitor_mode_cb)
-		mac->sme.monitor_mode_cb(vdev_id);
+		mac->sme.monitor_mode_cb(vdev_id, status);
 	else {
 		sme_warn_rl("monitor_mode_cb is not registered");
 		return QDF_STATUS_E_FAILURE;
