@@ -759,8 +759,6 @@ wma_injection_debug_cache_update(uint32_t desc_id,
 }
 
 /*
- * Claim an entry under the cache lock.
-/*
  * Claim an entry under the cache lock. If completion races with the WMI
  * submit call, record it and defer buffer release until the submitter has
  * returned and no longer owns the call stack.
@@ -1367,7 +1365,6 @@ static void wma_injection_reaper_work_cb(void *context)
 }
 
 
-QDF_STATUS wma_init_injection_queue(
 QDF_STATUS wma_init_injection_queue(tp_wma_handle wma_handle)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
@@ -1580,7 +1577,6 @@ QDF_STATUS wma_deinit_injection_queue(tp_wma_handle wma_handle)
 }
 
 
-QDF_STATUS wma_queue_injection_frame(
 QDF_STATUS wma_queue_injection_frame(tp_wma_handle wma_handle,
 				     struct inject_frame_req *req,
 				     uint8_t vdev_id)
