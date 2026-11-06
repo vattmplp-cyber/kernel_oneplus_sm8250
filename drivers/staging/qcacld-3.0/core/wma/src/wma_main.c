@@ -4394,6 +4394,7 @@ QDF_STATUS wma_wmi_service_close(void)
 QDF_STATUS wma_wmi_work_close(void)
 {
 	tp_wma_handle wma_handle;
+	QDF_STATUS qdf_status;
 
 	WMA_LOGD("%s: Enter", __func__);
 
@@ -4409,6 +4410,18 @@ QDF_STATUS wma_wmi_work_close(void)
 	if (!wma_handle->wmi_handle) {
 		WMA_LOGE("%s: Invalid wmi handle", __func__);
 		return QDF_STATUS_E_INVAL;
+	}
+
+	/*
+	 * Drain injection DMA ownership before removing WMI work. If firmware
+	 * has not completed the buffers, keep WMI operational and let the caller
+	 * retry teardown rather than removing the completion path.
+	 */
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		WMA_LOGE("%s: injection queue DMA is not quiesced: %d",
+			 __func__, qdf_status);
+		return qdf_status;
 	}
 
 	/* remove the wmi work */
@@ -4444,6 +4457,17 @@ QDF_STATUS wma_close(void)
 	if (!wma_handle->wmi_handle) {
 		WMA_LOGE("%s: Invalid wmi handle", __func__);
 		return QDF_STATUS_E_INVAL;
+	}
+
+	/*
+	 * Fail before releasing any WMA/PSOC resources if DMA ownership has not
+	 * drained. This also covers callers that do not use wma_wmi_work_close().
+	 */
+	qdf_status = wma_deinit_injection_queue(wma_handle);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		WMA_LOGE("%s: injection queue DMA is not quiesced: %d",
+			 __func__, qdf_status);
+		return qdf_status;
 	}
 
 	/* Free DBS list */
@@ -4507,13 +4531,6 @@ QDF_STATUS wma_close(void)
 	pmo_unregister_is_device_in_low_pwr_mode(wma_handle->psoc);
 	pmo_unregister_get_pause_bitmap(wma_handle->psoc);
 	pmo_unregister_pause_bitmap_notifier(wma_handle->psoc);
-
-	/* Deinitialize frame injection queue */
-	qdf_status = wma_deinit_injection_queue(wma_handle);
-	if (qdf_status != QDF_STATUS_SUCCESS) {
-		WMA_LOGE("%s: Failed to deinitialize injection queue: %d",
-			 __func__, qdf_status);
-	}
 
 	tgt_psoc_info = wlan_psoc_get_tgt_if_handle(wma_handle->psoc);
 	init_deinit_free_num_units(wma_handle->psoc, tgt_psoc_info);
