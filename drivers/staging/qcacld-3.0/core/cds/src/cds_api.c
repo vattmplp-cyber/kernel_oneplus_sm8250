@@ -1341,8 +1341,8 @@ QDF_STATUS cds_close(struct wlan_objmgr_psoc *psoc)
 
 	qdf_status = wma_wmi_work_close();
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		cds_err("Failed to close wma_wmi_work");
-		QDF_ASSERT(0);
+		cds_err("Failed to close wma_wmi_work: %d", qdf_status);
+		return qdf_status;
 	}
 
 	if (gp_cds_context->htc_ctx) {
