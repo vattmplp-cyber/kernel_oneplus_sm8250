@@ -83,7 +83,7 @@ static inline void wma_injection_unmap_tx_buf(qdf_nbuf_t buf)
 /* Timeout for queue processing work in milliseconds */
 #define WMA_FRAME_INJECT_QUEUE_TIMEOUT_MS  100
 
-/* Reaper timer interval: how often we scan for stale in-flight nbufs (ms) */
+/* Reaper interval: check for overdue in-flight nbufs and warn (ms) */
 #define WMA_INJECTION_REAPER_INTERVAL_MS   1000
 
 /*
@@ -802,9 +802,9 @@ wma_injection_debug_cache_get(uint32_t desc_id,
 }
 
 /*
- * Attach before WMI submission, but protect the buffer from the reaper until
- * the send call returns. An early completion only marks the entry; this
- * submit-done helper then takes ownership of the buffer.
+ * Attach before WMI submission. If completion races with the WMI send call,
+ * it only marks the entry; the submitter retains ownership until WMI returns
+ * and the submit-done helper can safely take the completed buffer.
  */
 static QDF_STATUS
 wma_injection_debug_cache_set_tx_buf(uint32_t desc_id, qdf_nbuf_t tx_buf)
