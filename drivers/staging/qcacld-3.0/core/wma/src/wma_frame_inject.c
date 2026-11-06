@@ -1314,7 +1314,7 @@ static void wma_process_injection_queue_delayed_work(void *context)
 static void wma_injection_reaper_work_cb(void *context)
 {
 	struct wma_injection_queue_ctx *ctx = &g_wma_injection_ctx;
-	uint64_t now_ts, age_us;
+	uint64_t now_ts, age_us = 0;
 	uint32_t warned = 0;
 	int i;
 
@@ -2024,16 +2024,6 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * override this; the log below records the requested setting.
 	 */
 	mgmt_params.use_6mbps = (monitor_vdev && !req->tx_rate) ? 1 : 0;
-	status = wma_injection_debug_cache_update(mgmt_params.desc_id, req,
-						  fc_type, fc_subtype,
-						  mgmt_params.chanfreq);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		qdf_nbuf_free(wmi_buf);
-		if (status != QDF_STATUS_E_AGAIN)
-			wma_err("Injection: cannot reserve debug cache slot for desc_id=%u: %d",
-				mgmt_params.desc_id, status);
-		return status;
-	}
 
 	/* Set transmission rate if specified in injection request */
 	if (req->tx_rate != 0) {
@@ -2127,6 +2117,17 @@ QDF_STATUS wma_send_injection_frame_to_fw(tp_wma_handle wma_handle,
 	 * past the 200-buffer admission limit. If capacity is exhausted, leave
 	 * the frame queued for a delayed retry; never submit an untracked nbuf.
 	 */
+	status = wma_injection_debug_cache_update(mgmt_params.desc_id, req,
+						  fc_type, fc_subtype,
+						  mgmt_params.chanfreq);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_nbuf_free(wmi_buf);
+		if (status != QDF_STATUS_E_AGAIN)
+			wma_err("Injection: cannot reserve debug cache slot for desc_id=%u: %d",
+				mgmt_params.desc_id, status);
+		return status;
+	}
+
 	status = wma_injection_debug_cache_set_tx_buf(mgmt_params.desc_id,
 						      wmi_buf);
 	if (QDF_IS_STATUS_ERROR(status)) {
