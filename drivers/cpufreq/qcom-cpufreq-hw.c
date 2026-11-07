@@ -91,7 +91,6 @@ struct qcom_cpufreq_oc_row {
 struct qcom_cpufreq_oc_profile {
 	u32 factory_last_freq;
 	u32 first_row;
-	u32 cpu_count;
 	struct qcom_cpufreq_oc_row rows[QCOM_CPUFREQ_OC_ROWS];
 };
 
@@ -104,7 +103,6 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[0] = {
 		.factory_last_freq = 1804800,
 		.first_row = 17,
-		.cpu_count = 4,
 		.rows = {
 			{ 0x40040063, 0x0011030c, 1900800, 780000 },
 			{ 0x40040069, 0x0012032c, 2016000, 812000 },
@@ -113,7 +111,6 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[1] = {
 		.factory_last_freq = 2419200,
 		.first_row = 18,
-		.cpu_count = 3,
 		.rows = {
 			{ 0x40040083, 0x001203a8, 2515200, 936000 },
 			{ 0x40040088, 0x001303c8, 2611200, 968000 },
@@ -122,7 +119,6 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[2] = {
 		.factory_last_freq = 2841600,
 		.first_row = 20,
-		.cpu_count = 1,
 		.rows = {
 			{ 0x400400a1, 0x001403c0, 3091200, 960000 },
 			{ 0x400400a6, 0x001503fc, 3187200, 1020000 },
@@ -254,8 +250,7 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 		return 0;
 
 	profile = &qcom_cpufreq_oc_profiles[c->domain_id];
-	if (first_row != profile->first_row ||
-	    cpumask_weight(&c->related_cpus) != profile->cpu_count)
+	if (first_row != profile->first_row)
 		return -EINVAL;
 
 	/* The SM8250 DT specifies four-byte LUT entries and 40 slots. */
@@ -731,9 +726,10 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	void __iomem *base_freq, *base_volt;
 	u32 i, core_count, prev_cc, prev_freq, cur_freq, volt;
 	unsigned long cpu;
+	bool oc_applied = false;
 	int ret;
 
-	c->table = devm_kcalloc(dev, lut_max_entries + 1,
+	c->table = devm_kcalloc(dev, (size_t)lut_max_entries + 4,
 				sizeof(*c->table), GFP_KERNEL);
 	if (!c->table)
 		return -ENOMEM;
@@ -822,6 +818,7 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 				ret = qcom_cpufreq_hw_apply_oc(dev, c,
 							base_freq, base_volt, i);
 				if (ret > 0) {
+					oc_applied = true;
 					i += ret;
 					break;
 				}
@@ -847,6 +844,10 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 
 	c->lut_max_entries = i;
 	c->table[i].frequency = CPUFREQ_TABLE_END;
+
+	if (oc_applied)
+		pr_info("[CPU_OC_APPLIED] Domain %u table expanded to %u entries. Max freq: %u kHz\n",
+			c->domain_id, i, c->table[i - 1].frequency);
 
 	if (c->skip_data.skip) {
 		pr_info("%s Skip: Index[%u], Frequency[%u], Core Count %u, Final Index %u Actual Index %u Prev_Freq[%u] Prev_Index[%u] Prev_CC[%u]\n",
