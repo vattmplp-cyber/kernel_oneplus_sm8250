@@ -91,6 +91,7 @@ struct qcom_cpufreq_oc_row {
 struct qcom_cpufreq_oc_profile {
 	u32 factory_last_freq;
 	u32 first_row;
+	u32 cpu_count;
 	struct qcom_cpufreq_oc_row rows[QCOM_CPUFREQ_OC_ROWS];
 };
 
@@ -103,6 +104,7 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[0] = {
 		.factory_last_freq = 1804800,
 		.first_row = 17,
+		.cpu_count = 4,
 		.rows = {
 			{ 0x40040063, 0x0011030c, 1900800, 780000 },
 			{ 0x40040069, 0x0012032c, 2016000, 812000 },
@@ -111,6 +113,7 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[1] = {
 		.factory_last_freq = 2419200,
 		.first_row = 18,
+		.cpu_count = 3,
 		.rows = {
 			{ 0x40040083, 0x001203a8, 2515200, 936000 },
 			{ 0x40040088, 0x001303c8, 2611200, 968000 },
@@ -119,6 +122,7 @@ static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
 	[2] = {
 		.factory_last_freq = 2841600,
 		.first_row = 20,
+		.cpu_count = 1,
 		.rows = {
 			{ 0x400400a1, 0x001403c0, 3091200, 960000 },
 			{ 0x400400a6, 0x001503fc, 3187200, 1020000 },
@@ -225,7 +229,6 @@ static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-
 /*
  * Replace the duplicated tail of a known SM8250 EPSS LUT with validated
  * overclock rows.  Return the number of rows installed, zero for domains
@@ -251,7 +254,8 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 		return 0;
 
 	profile = &qcom_cpufreq_oc_profiles[c->domain_id];
-	if (first_row != profile->first_row)
+	if (first_row != profile->first_row ||
+	    cpumask_weight(&c->related_cpus) != profile->cpu_count)
 		return -EINVAL;
 
 	/* The SM8250 DT specifies four-byte LUT entries and 40 slots. */
