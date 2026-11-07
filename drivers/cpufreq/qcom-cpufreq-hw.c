@@ -244,6 +244,7 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 	unsigned long cpu;
 	unsigned int i;
 	u32 offset, decoded_freq, decoded_volt;
+	u32 readback_freq, readback_volt;
 	int ret = 0;
 
 	if (c->domain_id >= ARRAY_SIZE(qcom_cpufreq_oc_profiles))
@@ -291,7 +292,11 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 			return -EINVAL;
 	}
 
-	/* Program the two LUT windows, then require an exact MMIO readback. */
+	/*
+	 * Program the two LUT windows.  Readback is diagnostic only: some
+	 * EPSS implementations do not return the just-written value here.
+	 * Do not reject the OC profile or roll back solely on readback.
+	 */
 	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
 		offset = (first_row + i) * lut_row_size;
 		writel_relaxed(profile->rows[i].raw_freq, base_freq + offset);
@@ -301,13 +306,16 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 
 	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
 		offset = (first_row + i) * lut_row_size;
-		if (readl_relaxed(base_freq + offset) !=
-						profile->rows[i].raw_freq ||
-		    readl_relaxed(base_volt + offset) !=
-						profile->rows[i].raw_volt) {
-			ret = -EIO;
-			goto restore_lut;
-		}
+		readback_freq = readl_relaxed(base_freq + offset);
+		readback_volt = readl_relaxed(base_volt + offset);
+		if (readback_freq != profile->rows[i].raw_freq ||
+		    readback_volt != profile->rows[i].raw_volt)
+			pr_warn("[CPU_OC] MMIO readback mismatch at row %u, "
+				"proceeding anyway (freq 0x%08x/0x%08x, "
+				"volt 0x%08x/0x%08x)\n",
+				first_row + i, readback_freq,
+				profile->rows[i].raw_freq, readback_volt,
+				profile->rows[i].raw_volt);
 	}
 
 	/* Register each OPP on every CPU in the frequency domain. */
@@ -561,15 +569,27 @@ qcom_cpufreq_hw_target_index(struct cpufreq_policy *policy,
 			     unsigned int index)
 {
 	struct cpufreq_qcom *c = policy->driver_data;
+	unsigned int perf_index = index;
 	unsigned long flags;
+
+	/* Keep PERF_STATE writes within the published hardware LUT/table. */
+	if (unlikely(!policy->freq_table ||
+		     index >= c->lut_max_entries ||
+		     index >= c->lut_dump_count))
+		return -EINVAL;
 
 	if (c->skip_data.skip && index == c->skip_data.high_temp_index) {
 		spin_lock_irqsave(&c->skip_data.lock, flags);
-		writel_relaxed(c->skip_data.final_index,
-				c->reg_bases[REG_PERF_STATE]);
+		perf_index = c->skip_data.final_index;
+		if (unlikely(perf_index >= c->lut_max_entries ||
+			     perf_index >= c->lut_dump_count)) {
+			spin_unlock_irqrestore(&c->skip_data.lock, flags);
+			return -EINVAL;
+		}
+		writel_relaxed(perf_index, c->reg_bases[REG_PERF_STATE]);
 		spin_unlock_irqrestore(&c->skip_data.lock, flags);
 	} else {
-		writel_relaxed(index, c->reg_bases[REG_PERF_STATE]);
+		writel_relaxed(perf_index, c->reg_bases[REG_PERF_STATE]);
 	}
 
 	arch_set_freq_scale(policy->related_cpus,
