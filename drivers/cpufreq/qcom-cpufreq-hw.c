@@ -79,6 +79,53 @@ struct qcom_cpufreq_lut_entry {
 	u32 voltage;
 };
 
+#define QCOM_CPUFREQ_OC_ROWS	2
+
+struct qcom_cpufreq_oc_row {
+	u32 raw_freq;
+	u32 raw_volt;
+	u32 frequency;
+	u32 voltage;
+};
+
+struct qcom_cpufreq_oc_profile {
+	u32 factory_last_freq;
+	u32 first_row;
+	struct qcom_cpufreq_oc_row rows[QCOM_CPUFREQ_OC_ROWS];
+};
+
+/*
+ * SM8250 EPSS overclock rows.  These are only installed when the runtime
+ * LUT matches the expected factory endpoint and the unused slots still
+ * contain exact copies of that endpoint.
+ */
+static const struct qcom_cpufreq_oc_profile qcom_cpufreq_oc_profiles[] = {
+	[0] = {
+		.factory_last_freq = 1804800,
+		.first_row = 17,
+		.rows = {
+			{ 0x40040063, 0x0011030c, 1900800, 780000 },
+			{ 0x40040069, 0x0012032c, 2016000, 812000 },
+		},
+	},
+	[1] = {
+		.factory_last_freq = 2419200,
+		.first_row = 18,
+		.rows = {
+			{ 0x40040083, 0x001203a8, 2515200, 936000 },
+			{ 0x40040088, 0x001303c8, 2611200, 968000 },
+		},
+	},
+	[2] = {
+		.factory_last_freq = 2841600,
+		.first_row = 20,
+		.rows = {
+			{ 0x400400a1, 0x001403c0, 3091200, 960000 },
+			{ 0x400400a6, 0x001503fc, 3187200, 1020000 },
+		},
+	},
+};
+
 struct cpufreq_qcom {
 	struct cpufreq_frequency_table *table;
 	struct qcom_cpufreq_lut_entry *lut_dump;
@@ -176,6 +223,182 @@ static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
 	}
 
 	return 0;
+}
+
+
+/*
+ * Replace the duplicated tail of a known SM8250 EPSS LUT with validated
+ * overclock rows.  Return the number of rows installed, zero for domains
+ * without a profile, or a negative error after restoring the factory slots.
+ */
+static int qcom_cpufreq_hw_apply_oc(struct device *dev,
+				    struct cpufreq_qcom *c,
+				    void __iomem *base_freq,
+				    void __iomem *base_volt,
+				    unsigned int first_row)
+{
+	const struct qcom_cpufreq_oc_profile *profile;
+	const struct qcom_cpufreq_lut_entry *factory_last;
+	struct dev_pm_opp *opp;
+	struct device *cpu_dev;
+	bool opp_added[NR_CPUS][QCOM_CPUFREQ_OC_ROWS] = { { false } };
+	unsigned long cpu;
+	unsigned int i;
+	u32 offset, decoded_freq, decoded_volt;
+	int ret = 0;
+
+	if (c->domain_id >= ARRAY_SIZE(qcom_cpufreq_oc_profiles))
+		return 0;
+
+	profile = &qcom_cpufreq_oc_profiles[c->domain_id];
+	if (first_row != profile->first_row)
+		return -EINVAL;
+
+	/* The SM8250 DT specifies four-byte LUT entries and 40 slots. */
+	if (lut_row_size != sizeof(u32) ||
+	    first_row < 1 ||
+	    first_row + QCOM_CPUFREQ_OC_ROWS > c->lut_dump_count ||
+	    first_row + QCOM_CPUFREQ_OC_ROWS > lut_max_entries)
+		return -EINVAL;
+
+	factory_last = &c->lut_dump[first_row - 1];
+	if (factory_last->frequency != profile->factory_last_freq ||
+	    factory_last->core_count != c->max_cores)
+		return -EINVAL;
+
+	/*
+	 * Do not overwrite a non-duplicate or variant-specific LUT.  Every
+	 * target slot must still contain the final factory frequency/voltage.
+	 */
+	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+		const struct qcom_cpufreq_oc_row *oc = &profile->rows[i];
+		const struct qcom_cpufreq_lut_entry *slot =
+			&c->lut_dump[first_row + i];
+		u32 src, lval;
+
+		if (slot->raw_freq != factory_last->raw_freq ||
+		    slot->raw_volt != factory_last->raw_volt)
+			return -EINVAL;
+
+		src = (oc->raw_freq & GENMASK(31, 30)) >> 30;
+		lval = oc->raw_freq & GENMASK(7, 0);
+		if (!src || CORE_COUNT_VAL(oc->raw_freq) != c->max_cores)
+			return -EINVAL;
+
+		decoded_freq = c->xo_rate * lval / 1000;
+		decoded_volt = (oc->raw_volt & GENMASK(11, 0)) * 1000;
+		if (decoded_freq != oc->frequency ||
+		    decoded_volt != oc->voltage)
+			return -EINVAL;
+	}
+
+	/* Program the two LUT windows, then require an exact MMIO readback. */
+	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+		offset = (first_row + i) * lut_row_size;
+		writel_relaxed(profile->rows[i].raw_freq, base_freq + offset);
+		writel_relaxed(profile->rows[i].raw_volt, base_volt + offset);
+	}
+	wmb();
+
+	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+		offset = (first_row + i) * lut_row_size;
+		if (readl_relaxed(base_freq + offset) !=
+						profile->rows[i].raw_freq ||
+		    readl_relaxed(base_volt + offset) !=
+						profile->rows[i].raw_volt) {
+			ret = -EIO;
+			goto restore_lut;
+		}
+	}
+
+	/* Register each OPP on every CPU in the frequency domain. */
+	for_each_cpu(cpu, &c->related_cpus) {
+		cpu_dev = get_cpu_device(cpu);
+		if (!cpu_dev) {
+			ret = -ENODEV;
+			goto rollback_opps;
+		}
+
+		for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+			unsigned long freq_hz =
+				(unsigned long)profile->rows[i].frequency * 1000;
+
+			ret = dev_pm_opp_add(cpu_dev, freq_hz,
+					     profile->rows[i].voltage);
+			if (!ret) {
+				opp_added[cpu][i] = true;
+				continue;
+			}
+
+			/* Accept an existing OPP only when its voltage matches. */
+			if (ret != -EEXIST)
+				goto rollback_opps;
+
+			opp = dev_pm_opp_find_freq_exact(cpu_dev, freq_hz, true);
+			if (IS_ERR(opp)) {
+				ret = PTR_ERR(opp);
+				goto rollback_opps;
+			}
+			decoded_volt = dev_pm_opp_get_voltage(opp);
+			dev_pm_opp_put(opp);
+			if (decoded_volt != profile->rows[i].voltage) {
+				ret = -EINVAL;
+				goto rollback_opps;
+			}
+		}
+	}
+
+	/* Publish the read-back-verified values to procfs and cpufreq. */
+	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+		struct qcom_cpufreq_lut_entry *entry =
+			&c->lut_dump[first_row + i];
+
+		entry->raw_freq = profile->rows[i].raw_freq;
+		entry->raw_volt = profile->rows[i].raw_volt;
+		entry->src = (entry->raw_freq & GENMASK(31, 30)) >> 30;
+		entry->lval = entry->raw_freq & GENMASK(7, 0);
+		entry->core_count = CORE_COUNT_VAL(entry->raw_freq);
+		entry->vc = entry->raw_volt & GENMASK(21, 16);
+		entry->frequency = profile->rows[i].frequency;
+		entry->voltage = profile->rows[i].voltage;
+
+		c->table[first_row + i].frequency = entry->frequency;
+		c->table[first_row + i].flags = 0;
+	}
+
+	dev_info(dev, "Domain %u: installed %u validated EPSS OC rows, max %u kHz\n",
+		 c->domain_id, QCOM_CPUFREQ_OC_ROWS,
+		 profile->rows[QCOM_CPUFREQ_OC_ROWS - 1].frequency);
+
+	return QCOM_CPUFREQ_OC_ROWS;
+
+rollback_opps:
+	for_each_cpu(cpu, &c->related_cpus) {
+		cpu_dev = get_cpu_device(cpu);
+		if (!cpu_dev)
+			continue;
+		for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+			if (opp_added[cpu][i])
+				dev_pm_opp_remove(cpu_dev,
+					(unsigned long)profile->rows[i].frequency *
+					1000);
+		}
+	}
+
+restore_lut:
+	/* Restore the exact factory words captured before any writes. */
+	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
+		offset = (first_row + i) * lut_row_size;
+		writel_relaxed(c->lut_dump[first_row + i].raw_freq,
+			       base_freq + offset);
+		writel_relaxed(c->lut_dump[first_row + i].raw_volt,
+			       base_volt + offset);
+	}
+	wmb();
+
+	dev_warn(dev, "Domain %u: OC rows rejected (%d); factory LUT retained\n",
+		 c->domain_id, ret);
+	return ret;
 }
 
 static ssize_t dcvsh_freq_limit_show(struct device *dev,
@@ -504,6 +727,7 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 	void __iomem *base_freq, *base_volt;
 	u32 i, core_count, prev_cc, prev_freq, cur_freq, volt;
 	unsigned long cpu;
+	int ret;
 
 	c->table = devm_kcalloc(dev, lut_max_entries + 1,
 				sizeof(*c->table), GFP_KERNEL);
@@ -590,6 +814,17 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 
 				if (prev_freq == CPUFREQ_ENTRY_INVALID)
 					prev->flags = CPUFREQ_BOOST_FREQ;
+
+				ret = qcom_cpufreq_hw_apply_oc(dev, c,
+							base_freq, base_volt, i);
+				if (ret > 0) {
+					i += ret;
+					break;
+				}
+				if (ret < 0)
+					dev_warn(dev,
+						 "Domain %u: OC profile not applied at row %u (%d)\n",
+						 c->domain_id, i, ret);
 			}
 			break;
 		}
