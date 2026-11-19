@@ -185,6 +185,11 @@ static struct cpufreq_counter qcom_cpufreq_counter[NR_CPUS];
 static struct cpufreq_qcom *qcom_freq_domain_map[NR_CPUS];
 static struct cpufreq_qcom *qcom_lut_domain_map[3];
 static struct proc_dir_entry *qcom_lut_dump_proc;
+/*
+ * Bit N records an EPSS LUT readback mismatch for domain N.
+ * -ENODATA means no OC readback check has run yet.
+ */
+static int oc_readback_status = -ENODATA;
 
 static unsigned int qcom_cpufreq_hw_get(unsigned int cpu);
 
@@ -194,31 +199,52 @@ static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
 		"Silver", "Gold", "Prime",
 	};
 	struct cpufreq_qcom *c;
-	struct qcom_cpufreq_lut_entry *entry;
-	unsigned int domain, row;
+	unsigned int domain, row, perf_state;
+	u32 raw_freq, raw_volt, src, lval, core_count, vc;
+	u32 frequency, voltage;
 
-	seq_puts(m, "EPSS CPU frequency/voltage LUT snapshot (read-only)\n");
+	seq_puts(m, "EPSS live MMIO CPU frequency/voltage LUT (read-only)\n");
+	seq_printf(m, "OC readback status: %d (0=all checked rows matched; "
+		   "bits 0..2 identify mismatched Silver/Gold/Prime domains; "
+		   "-ENODATA=no check)\n", READ_ONCE(oc_readback_status));
 
 	for (domain = 0; domain < ARRAY_SIZE(qcom_lut_domain_map); domain++) {
 		c = qcom_lut_domain_map[domain];
-		if (!c || !c->lut_dump) {
+		if (!c || !c->reg_bases[REG_FREQ_LUT_TABLE] ||
+		    !c->reg_bases[REG_VOLT_LUT_TABLE] ||
+		    !c->reg_bases[REG_PERF_STATE]) {
 			seq_printf(m, "Domain: %u (%s) - unavailable\n",
 				   domain, domain_names[domain]);
 			continue;
 		}
 
-		seq_printf(m, "\nDomain: %u (%s), Rows: %u\n",
-			   domain, domain_names[domain], c->lut_dump_count);
+		perf_state = readl_relaxed(c->reg_bases[REG_PERF_STATE]);
+		seq_printf(m, "\nDomain: %u (%s), Rows: %u, PERF_STATE: %u "
+			   "(0x%08x)\n", domain, domain_names[domain],
+			   c->lut_dump_count, perf_state, perf_state);
 		seq_puts(m, "Row Freq_kHz Volt_uV src lval core_count vc "
 			      "RawFreqReg RawVoltReg\n");
 
+		/* Read both LUT windows live; never print the probe-time cache. */
 		for (row = 0; row < c->lut_dump_count; row++) {
-			entry = &c->lut_dump[row];
+			raw_freq = readl_relaxed(
+				c->reg_bases[REG_FREQ_LUT_TABLE] +
+				row * lut_row_size);
+			raw_volt = readl_relaxed(
+				c->reg_bases[REG_VOLT_LUT_TABLE] +
+				row * lut_row_size);
+			src = (raw_freq & GENMASK(31, 30)) >> 30;
+			lval = raw_freq & GENMASK(7, 0);
+			core_count = CORE_COUNT_VAL(raw_freq);
+			vc = raw_volt & GENMASK(21, 16);
+			voltage = (raw_volt & GENMASK(11, 0)) * 1000;
+			frequency = src ? c->xo_rate * lval / 1000 :
+				c->cpu_hw_rate / 1000;
+
 			seq_printf(m,
 				   "%u %u %u %u %u %u %u 0x%08x 0x%08x\n",
-				   row, entry->frequency, entry->voltage,
-				   entry->src, entry->lval, entry->core_count,
-				   entry->vc, entry->raw_freq, entry->raw_volt);
+				   row, frequency, voltage, src, lval, core_count,
+				   vc, raw_freq, raw_volt);
 		}
 	}
 
@@ -293,9 +319,9 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 	}
 
 	/*
-	 * Program the two LUT windows.  Readback is diagnostic only: some
-	 * EPSS implementations do not return the just-written value here.
-	 * Do not reject the OC profile or roll back solely on readback.
+	 * Program the two LUT windows. Readback remains diagnostic: record
+	 * the result for procfs, but do not reject this profile solely because
+	 * an EPSS implementation does not expose the just-written value.
 	 */
 	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
 		offset = (first_row + i) * lut_row_size;
@@ -304,18 +330,25 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 	}
 	wmb();
 
+	if (oc_readback_status == -ENODATA)
+		WRITE_ONCE(oc_readback_status, 0);
+
 	for (i = 0; i < QCOM_CPUFREQ_OC_ROWS; i++) {
 		offset = (first_row + i) * lut_row_size;
 		readback_freq = readl_relaxed(base_freq + offset);
 		readback_volt = readl_relaxed(base_volt + offset);
 		if (readback_freq != profile->rows[i].raw_freq ||
-		    readback_volt != profile->rows[i].raw_volt)
+		    readback_volt != profile->rows[i].raw_volt) {
+			WRITE_ONCE(oc_readback_status,
+				   READ_ONCE(oc_readback_status) |
+				   BIT(c->domain_id));
 			pr_warn("[CPU_OC] MMIO readback mismatch at row %u, "
 				"proceeding anyway (freq 0x%08x/0x%08x, "
-				"volt 0x%08x/0x%08x)\n",
+				"volt 0x%08x/0x%08x)\\n",
 				first_row + i, readback_freq,
 				profile->rows[i].raw_freq, readback_volt,
 				profile->rows[i].raw_volt);
+		}
 	}
 
 	/* Register each OPP on every CPU in the frequency domain. */
@@ -1200,7 +1233,7 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	cpufreq_hw_register_cooling_device(pdev);
 
 	/*
-	 * Publish the immutable LUT snapshots only after all domain resources
+	 * Publish the live MMIO LUT reader only after all domain resources
 	 * and cpufreq registration have completed successfully.
 	 */
 	if (!qcom_lut_dump_proc) {
