@@ -8,6 +8,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
@@ -50,6 +51,12 @@ enum {
 
 	REG_ARRAY_SIZE,
 };
+
+/* Experimental EPSS overclocking is opt-in; factory LUT is the default. */
+static bool epss_oc_enable;
+module_param(epss_oc_enable, bool, 0444);
+MODULE_PARM_DESC(epss_oc_enable,
+	"Enable experimental EPSS LUT overclocking (default: false)");
 
 static unsigned int lut_row_size = LUT_ROW_SIZE;
 static unsigned int lut_max_entries = LUT_MAX_ENTRIES;
@@ -875,17 +882,19 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 				if (prev_freq == CPUFREQ_ENTRY_INVALID)
 					prev->flags = CPUFREQ_BOOST_FREQ;
 
-				ret = qcom_cpufreq_hw_apply_oc(dev, c,
-							base_freq, base_volt, i);
-				if (ret > 0) {
-					oc_applied = true;
-					i += ret;
-					break;
+				if (epss_oc_enable) {
+					ret = qcom_cpufreq_hw_apply_oc(dev, c,
+								base_freq, base_volt, i);
+					if (ret > 0) {
+						oc_applied = true;
+						i += ret;
+						break;
+					}
+					if (ret < 0)
+						dev_warn(dev,
+							 "Domain %u: OC profile not applied at row %u (%d)\n",
+							 c->domain_id, i, ret);
 				}
-				if (ret < 0)
-					dev_warn(dev,
-						 "Domain %u: OC profile not applied at row %u (%d)\n",
-						 c->domain_id, i, ret);
 			}
 			break;
 		}
