@@ -344,7 +344,7 @@ static int qcom_cpufreq_hw_apply_oc(struct device *dev,
 				   BIT(c->domain_id));
 			pr_warn("[CPU_OC] MMIO readback mismatch at row %u, "
 				"proceeding anyway (freq 0x%08x/0x%08x, "
-				"volt 0x%08x/0x%08x)\\n",
+				"volt 0x%08x/0x%08x)\n",
 				first_row + i, readback_freq,
 				profile->rows[i].raw_freq, readback_volt,
 				profile->rows[i].raw_volt);
