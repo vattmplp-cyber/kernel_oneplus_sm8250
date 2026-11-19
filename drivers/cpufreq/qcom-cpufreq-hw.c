@@ -200,6 +200,7 @@ static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
 	};
 	struct cpufreq_qcom *c;
 	unsigned int domain, row, perf_state;
+	u32 domain_state, dcvsh_limit_khz;
 	u32 raw_freq, raw_volt, src, lval, core_count, vc;
 	u32 frequency, voltage;
 
@@ -219,9 +220,15 @@ static int qcom_cpufreq_lut_dump_show(struct seq_file *m, void *v)
 		}
 
 		perf_state = readl_relaxed(c->reg_bases[REG_PERF_STATE]);
+		domain_state = c->reg_bases[REG_DOMAIN_STATE] ?
+			readl_relaxed(c->reg_bases[REG_DOMAIN_STATE]) : 0;
+		dcvsh_limit_khz = DIV_ROUND_CLOSEST_ULL(
+			(domain_state & GENMASK(7, 0)) * c->xo_rate, 1000);
 		seq_printf(m, "\nDomain: %u (%s), Rows: %u, PERF_STATE: %u "
-			   "(0x%08x)\n", domain, domain_names[domain],
-			   c->lut_dump_count, perf_state, perf_state);
+			   "(0x%08x), DOMAIN_STATE: 0x%08x, "
+			   "DCVSH_limit_kHz: %u\n", domain, domain_names[domain],
+			   c->lut_dump_count, perf_state, perf_state,
+			   domain_state, dcvsh_limit_khz);
 		seq_puts(m, "Row Freq_kHz Volt_uV src lval core_count vc "
 			      "RawFreqReg RawVoltReg\n");
 
