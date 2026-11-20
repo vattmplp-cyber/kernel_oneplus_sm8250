@@ -173,34 +173,3 @@ jobs:
             out/debug-manifest/**
             out/Meteoric-Kebab-AnyKernel3.zip
             out/ak3/dtb
-; then
-            echo "::error::Unexpected DTBO payload in AnyKernel staging directory"
-            exit 1
-          fi
-
-          {
-            echo "PROJECT=20809"
-            echo "DTB_ORDER=kona.dtb kona-v2.dtb kona-v2.1.dtb"
-            echo "DTBO_PARTITION=not packaged; existing vendor dtbo remains untouched"
-            stat -c '%n %s bytes' out/ak3/Image.gz out/ak3/dtb
-            sha256sum out/ak3/Image.gz out/ak3/dtb
-          } | tee out/debug-manifest/kebab-anykernel-package.txt
-
-          (cd out/ak3 && zip -r9 ../Meteoric-Kebab-AnyKernel3.zip .)
-          test -s out/Meteoric-Kebab-AnyKernel3.zip
-          ls -lh out/Meteoric-Kebab-AnyKernel3.zip
-
-      - name: Upload Kernel Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meteoric-Kebab-DIAGNOSTIC
-          if-no-files-found: warn
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/.config
-            out/System.map
-            out/debug-manifest/**
-            out/Meteoric-Kebab-AnyKernel3.zip
-            out/ak3/dtb
