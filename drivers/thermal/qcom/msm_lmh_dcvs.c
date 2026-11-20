@@ -54,8 +54,8 @@
 
 #define LIMITS_FREQ_CAP			0x46434150
 
-#define LIMITS_TEMP_DEFAULT		75000
-#define LIMITS_TEMP_HIGH_THRESH_MAX	120000
+#define LIMITS_TEMP_DEFAULT		125000
+#define LIMITS_TEMP_HIGH_THRESH_MAX	135000
 #define LIMITS_LOW_THRESHOLD_OFFSET	500
 #define LIMITS_POLLING_DELAY_MS		10
 #define LIMITS_CLUSTER_REQ_OFFSET	0x704
@@ -181,7 +181,7 @@ static unsigned long limits_mitigation_notify(struct limits_dcvs_hw *hw)
 
 	if (max_cpu_ct == cpumask_weight(&hw->core_map))
 		max_limit = max_cpu_limit;
-	sched_update_cpu_freq_min_max(&hw->core_map, 0, max_limit);
+//	sched_update_cpu_freq_min_max(&hw->core_map, 0, max_limit);
 	pr_debug("CPU:%d max limit:%lu\n", cpumask_first(&hw->core_map),
 			max_limit);
 	trace_lmh_dcvs_freq(cpumask_first(&hw->core_map), max_limit);
