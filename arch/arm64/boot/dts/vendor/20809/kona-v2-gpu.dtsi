@@ -73,7 +73,7 @@
 			opp-microvolt = <RPMH_REGULATOR_LEVEL_LOW_SVS>;
 		};
 
-	}
+	};
 };
 
 &msm_gpu {
