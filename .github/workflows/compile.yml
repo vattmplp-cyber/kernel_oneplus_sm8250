@@ -23,7 +23,7 @@ jobs:
       - name: Setup Build Environment
         run: |
           sudo apt update
-          sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu
+          sudo apt install -y bc bison build-essential flex git libssl-dev libelf-dev clang lld llvm libncurses-dev gcc-aarch64-linux-gnu zip
 
       - name: Build Kernel
         run: |
@@ -50,6 +50,16 @@ jobs:
 
           echo "=== 3. Повна збірка всього іншого ядра ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+
+          echo "=== Verify kebab 20809 base DTBs ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip dtbs
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            arch/arm64/boot/dts/vendor/20809/kona.dtb \
+            arch/arm64/boot/dts/vendor/20809/kona-v2.dtb \
+            arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona.dtb
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.dtb
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
 
       - name: Save Build Identity and Diagnostics
         if: always()
@@ -107,6 +117,47 @@ jobs:
           grep -q -- '-DFEATURE_FRAME_INJECTION_SUPPORT' out/debug-manifest/build-identity.txt
           grep -q -- '-DWLAN_LOG_DEBUG' out/debug-manifest/build-identity.txt
 
+      - name: Package kebab AnyKernel3 ZIP
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona.dtb
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.dtb
+          test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
+
+          rm -rf out/ak3
+          mkdir -p out/ak3 out/debug-manifest
+          cp -a anykernel/. out/ak3/
+          cp out/arch/arm64/boot/Image.gz out/ak3/Image.gz
+          cat \
+            out/arch/arm64/boot/dts/vendor/20809/kona.dtb \
+            out/arch/arm64/boot/dts/vendor/20809/kona-v2.dtb \
+            out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb \
+            > out/ak3/dtb
+
+          # Keep the vendor DTBO partition untouched: no DTBO payload is staged.
+          rm -f out/ak3/dtbo out/ak3/dtbo.img
+          test -s out/ak3/Image.gz
+          test -s out/ak3/dtb
+          if [ -e out/ak3/dtbo ] || [ -e out/ak3/dtbo.img ]; then
+            echo "::error::Unexpected DTBO payload in AnyKernel staging directory"
+            exit 1
+          fi
+
+          {
+            echo "PROJECT=20809"
+            echo "DTB_ORDER=kona.dtb kona-v2.dtb kona-v2.1.dtb"
+            echo "DTBO_PARTITION=not packaged; existing vendor dtbo remains untouched"
+            stat -c '%n %s bytes' out/ak3/Image.gz out/ak3/dtb
+            sha256sum out/ak3/Image.gz out/ak3/dtb
+          } | tee out/debug-manifest/kebab-anykernel-package.txt
+
+          (cd out/ak3 && zip -r9 ../Meteoric-Kebab-AnyKernel3.zip .)
+          test -s out/Meteoric-Kebab-AnyKernel3.zip
+          ls -lh out/Meteoric-Kebab-AnyKernel3.zip
+
       - name: Upload Kernel Artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -119,3 +170,36 @@ jobs:
             out/.config
             out/System.map
             out/debug-manifest/**
+            out/Meteoric-Kebab-AnyKernel3.zip
+            out/ak3/dtb
+; then
+            echo "::error::Unexpected DTBO payload in AnyKernel staging directory"
+            exit 1
+          fi
+
+          {
+            echo "PROJECT=20809"
+            echo "DTB_ORDER=kona.dtb kona-v2.dtb kona-v2.1.dtb"
+            echo "DTBO_PARTITION=not packaged; existing vendor dtbo remains untouched"
+            stat -c '%n %s bytes' out/ak3/Image.gz out/ak3/dtb
+            sha256sum out/ak3/Image.gz out/ak3/dtb
+          } | tee out/debug-manifest/kebab-anykernel-package.txt
+
+          (cd out/ak3 && zip -r9 ../Meteoric-Kebab-AnyKernel3.zip .)
+          test -s out/Meteoric-Kebab-AnyKernel3.zip
+          ls -lh out/Meteoric-Kebab-AnyKernel3.zip
+
+      - name: Upload Kernel Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Meteoric-Kebab-DIAGNOSTIC
+          if-no-files-found: warn
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+            out/.config
+            out/System.map
+            out/debug-manifest/**
+            out/Meteoric-Kebab-AnyKernel3.zip
+            out/ak3/dtb
