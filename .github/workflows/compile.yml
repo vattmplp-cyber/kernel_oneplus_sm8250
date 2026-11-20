@@ -48,6 +48,7 @@ jobs:
           grep -E "^CONFIG_HZ_250=y$|^CONFIG_HZ=250$" out/.config
           grep -qx 'CONFIG_HZ_250=y' out/.config
           grep -qx 'CONFIG_HZ=250' out/.config
+          grep -qx 'CONFIG_BUILD_ARM64_DT_OVERLAY=y' out/.config
 
           echo "=== Qualcomm qcacld compile check ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip drivers/staging/qcacld-3.0/
@@ -64,6 +65,8 @@ jobs:
           test -s out/arch/arm64/boot/dts/vendor/20809/kona.dtb
           test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.dtb
           test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
+          echo "=== Verify kona-v2.1 DT overlay symbols ==="
+          grep -aq '__symbols__' out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
 
       - name: Save Build Identity and Diagnostics
         if: always()
