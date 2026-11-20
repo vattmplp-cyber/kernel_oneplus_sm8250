@@ -154,6 +154,7 @@ jobs:
             sha256sum out/ak3/Image.gz out/ak3/dtb
           } | tee out/debug-manifest/kebab-anykernel-package.txt
 
+          echo "=== AnyKernel staging: Image.gz + 20809 base DTBs; no DTBO ==="
           (cd out/ak3 && zip -r9 ../Meteoric-Kebab-AnyKernel3.zip .)
           test -s out/Meteoric-Kebab-AnyKernel3.zip
           ls -lh out/Meteoric-Kebab-AnyKernel3.zip
