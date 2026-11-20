@@ -1,3 +1,5 @@
+dtb-$(CONFIG_ARCH_KONA) += kona.dtb kona-v2.dtb kona-v2.1.dtb
+
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
     dtbo-$(CONFIG_ARCH_KONA) += kona-mtp-overlay.dtbo
 

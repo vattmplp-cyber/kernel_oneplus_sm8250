@@ -54,9 +54,9 @@ jobs:
           echo "=== Verify kebab 20809 base DTBs ==="
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip dtbs
           make -j$(nproc) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            arch/arm64/boot/dts/vendor/20809/kona.dtb \
-            arch/arm64/boot/dts/vendor/20809/kona-v2.dtb \
-            arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
+            vendor/20809/kona.dtb \
+            vendor/20809/kona-v2.dtb \
+            vendor/20809/kona-v2.1.dtb
           test -s out/arch/arm64/boot/dts/vendor/20809/kona.dtb
           test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.dtb
           test -s out/arch/arm64/boot/dts/vendor/20809/kona-v2.1.dtb
