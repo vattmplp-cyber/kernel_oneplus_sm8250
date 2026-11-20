@@ -752,6 +752,7 @@ static ssize_t thermal_pwrlevel_store(struct device *dev,
 
 	if (level > pwr->num_pwrlevels - 2)
 		level = pwr->num_pwrlevels - 2;
+	level = 0;
 
 	pwr->thermal_pwrlevel = level;
 
