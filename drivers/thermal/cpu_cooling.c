@@ -406,6 +406,7 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 	/* Request state should be less than max_level */
 	if (WARN_ON(state > cpufreq_cdev->max_level))
 		return -EINVAL;
+	state = 0;
 
 	/* Check if the old cooling action is same as new cooling action */
 	if (cpufreq_cdev->cpufreq_state == state)
