@@ -173,6 +173,7 @@ static int cpu_isolate_set_cur_state(struct thermal_cooling_device *cdev,
 		return -EINVAL;
 
 	state = !!state;
+	state = 0;
 	/* Check if the old cooling action is same as new cooling action */
 	if (cpu_isolate_cdev->cpu_isolate_state == state)
 		return 0;
