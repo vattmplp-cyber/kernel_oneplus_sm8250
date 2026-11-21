@@ -974,7 +974,7 @@ static ssize_t max_gpuclk_show(struct device *dev,
 	struct kgsl_device *device = dev_get_drvdata(dev);
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n",
-		kgsl_pwrctrl_max_clock_get(device));
+		device->pwrctrl.pwrlevels[0].gpu_freq);
 }
 
 static ssize_t gpuclk_store(struct device *dev,
