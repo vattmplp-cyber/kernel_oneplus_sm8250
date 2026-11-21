@@ -3153,7 +3153,7 @@ done:
 	spin_unlock(&pwr->limits_lock);
 
 	mutex_lock(&device->mutex);
-	pwr->thermal_pwrlevel = max_level;
+	pwr->thermal_pwrlevel = 0;
 	kgsl_pwrctrl_pwrlevel_change(device, pwr->active_pwrlevel);
 	mutex_unlock(&device->mutex);
 }
